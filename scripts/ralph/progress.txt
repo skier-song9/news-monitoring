@@ -10,6 +10,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - Use partial unique indexes for nullable dedupe keys such as `source_url`, `canonical_url`, and hashes so SQLite enforces idempotency without treating multiple `NULL` values as conflicts.
 - Use partial unique indexes on nullable scope foreign keys to model one workspace default row plus one target override row, such as `alert_policy` records with `monitoring_target_id IS NULL` versus `IS NOT NULL`.
 - For backend write flows, wrap multi-table SQLite mutations in an explicit transaction helper and inject `now`/ID/token generators so `node:test` coverage stays deterministic without mocking the database.
+- For workspace-owned backend writes, gate creation on an `active` `workspace_membership` row and persist seeded child records in the same transaction, using request order for fields like `display_order`.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -63,4 +64,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: backend actions fit this repo best as dependency-free CommonJS service modules tested directly against `node:sqlite` with the real migrations applied.
   - Gotchas encountered: rows returned by `node:sqlite` use a null prototype, so tests should normalize query results before strict deep equality assertions.
   - Useful context: there are still no `AGENTS.md` files in the edited directories, so the reusable notes for this backend slice were captured here instead; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 20:54:28 KST - US-007
+- Implemented a transactional monitoring target backend service that creates a target with type, display name, note, default threshold, and ordered seed keywords in one write flow.
+- Added direct service tests covering successful target creation, seed keyword validation, active membership enforcement, and default threshold/note normalization.
+- Files changed: `src/backend/monitoring-target-service.cjs`, `src/db/schema/monitoring-target.cjs`, `tests/monitoring-target-service.test.cjs`, `tests/monitoring-target-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: use shared schema defaults like `defaultMonitoringTargetStatus` from `src/db/schema/*.cjs` in backend services so service behavior and migration tests stay aligned.
+  - Gotchas encountered: if target creation seeds related keyword rows, keep them inside the same transaction and assign `display_order` from the incoming array so later editing flows have a stable baseline.
+  - Useful context: there are still no `AGENTS.md` files in the edited directories, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
 ---

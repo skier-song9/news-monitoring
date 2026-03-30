@@ -7,6 +7,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { applyMigrations } = require('../src/db/migrations.cjs');
 const {
   defaultMonitoringTargetRiskThreshold,
+  defaultMonitoringTargetStatus,
   monitoringTargetStatuses,
   monitoringTargetTypes,
 } = require('../src/db/schema/monitoring-target.cjs');
@@ -30,7 +31,7 @@ test('monitoring target rows default to review required with the shared risk thr
 
   const target = db.prepare('SELECT status, default_risk_threshold FROM monitoring_target WHERE id = ?').get('target-1');
 
-  assert.equal(target.status, 'review_required');
+  assert.equal(target.status, defaultMonitoringTargetStatus);
   assert.equal(target.default_risk_threshold, defaultMonitoringTargetRiskThreshold);
 
   db.close();
@@ -98,7 +99,7 @@ test('monitoring target rows enforce type, status, and threshold constraints', (
 test('monitoring target constants match the migration contract', () => {
   assert.deepEqual(monitoringTargetTypes, ['company', 'person']);
   assert.deepEqual(monitoringTargetStatuses, [
-    'review_required',
+    defaultMonitoringTargetStatus,
     'profile_in_progress',
     'ready_for_review',
     'awaiting_activation',
@@ -106,5 +107,6 @@ test('monitoring target constants match the migration contract', () => {
     'paused',
     'archived',
   ]);
+  assert.equal(defaultMonitoringTargetStatus, 'review_required');
   assert.equal(defaultMonitoringTargetRiskThreshold, 70);
 });
