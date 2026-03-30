@@ -12,6 +12,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For backend write flows, wrap multi-table SQLite mutations in an explicit transaction helper and inject `now`/ID/token generators so `node:test` coverage stays deterministic without mocking the database.
 - For workspace-owned backend writes, gate creation on an `active` `workspace_membership` row and persist seeded child records in the same transaction, using request order for fields like `display_order`.
 - For background jobs that call external services, inject the search/LLM adapters plus `now`/ID generators, and keep the final SQLite persistence step in a short transaction so reruns stay deterministic and easy to test.
+- For ordered keyword collections, treat `display_order` as scoped to a single `source_type`, and make reorder flows rewrite the full ID set for that source in one transaction.
 - When a target discovery rerun regenerates profile data, clear any saved review state in the same transaction so stale mismatch or approval decisions do not leak into the next review cycle.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
@@ -93,4 +94,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keep user review/activation state in a dedicated workspace-scoped table so lifecycle metadata can be reset independently from the generated target profile.
   - Gotchas encountered: if a target is reopened after `mismatch`, the next discovery run must delete the old review row or the UI/backend will inherit stale approval state for a new profile.
   - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 42 passing tests.
+---
+## 2026-03-30 22:43:14 KST - US-010
+- Implemented keyword-management backend operations to add, disable, remove, and reorder target keywords, plus a collector-input query that groups active seed, expanded, and excluded keywords for downstream jobs.
+- Added direct service tests covering source-type ordering, active-only collector filtering, delete/reindex behavior, and invalid reorder payloads.
+- Files changed: `src/backend/monitoring-target-service.cjs`, `tests/monitoring-target-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep keyword ordering scoped to one `source_type`, and require reorder requests to submit the complete ID set for that source before rewriting sequential `display_order` values.
+  - Gotchas encountered: collector-facing keyword queries should filter `is_active = 1` in SQL so disabled rows stay stored without leaking into collection jobs.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 47 passing tests.
 ---

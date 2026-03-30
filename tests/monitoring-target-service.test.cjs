@@ -7,7 +7,12 @@ const { DatabaseSync } = require('node:sqlite');
 const {
   MonitoringTargetServiceError,
   activateMonitoringTarget,
+  addTargetKeyword,
   createMonitoringTarget,
+  disableTargetKeyword,
+  getMonitoringTargetCollectorInput,
+  removeTargetKeyword,
+  reorderTargetKeywords,
   saveMonitoringTargetReviewDecision,
 } = require('../src/backend/monitoring-target-service.cjs');
 const { applyMigrations } = require('../src/db/migrations.cjs');
@@ -23,7 +28,13 @@ const {
   monitoringTargetMismatchReviewDecision,
   monitoringTargetPartialMatchReviewDecision,
 } = require('../src/db/schema/monitoring-target-review.cjs');
-const { defaultTargetKeywordIsActive } = require('../src/db/schema/target-keyword.cjs');
+const {
+  defaultTargetKeywordDisplayOrder,
+  defaultTargetKeywordIsActive,
+  expandedTargetKeywordSourceType,
+  excludedTargetKeywordSourceType,
+  seedTargetKeywordSourceType,
+} = require('../src/db/schema/target-keyword.cjs');
 
 function createDatabase() {
   const db = new DatabaseSync(':memory:');
@@ -113,6 +124,30 @@ function insertReview(
     activatedByMembershipId,
     activatedAt,
   );
+}
+
+function insertTargetKeyword(
+  db,
+  {
+    id,
+    monitoringTargetId,
+    keyword,
+    sourceType = seedTargetKeywordSourceType,
+    isActive = defaultTargetKeywordIsActive,
+    displayOrder = defaultTargetKeywordDisplayOrder,
+  },
+) {
+  db.prepare(`
+    INSERT INTO target_keyword (
+      id,
+      monitoring_target_id,
+      keyword,
+      source_type,
+      is_active,
+      display_order
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, monitoringTargetId, keyword, sourceType, isActive, displayOrder);
 }
 
 function createIdGenerator(...ids) {
@@ -365,6 +400,498 @@ test('createMonitoringTarget applies the shared default threshold and normalizes
     status: defaultMonitoringTargetStatus,
     default_risk_threshold: defaultMonitoringTargetRiskThreshold,
   });
+
+  db.close();
+});
+
+test('addTargetKeyword appends a keyword within its source type order', () => {
+  const db = createDatabase();
+
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertTargetKeyword(db, {
+    id: 'expanded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme scandal',
+    sourceType: expandedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Jobs',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+
+  const targetKeyword = addTargetKeyword({
+    db,
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    userId: 'user-1',
+    keyword: ' Acme litigation ',
+    sourceType: ' expanded ',
+    now: () => '2026-03-30T14:00:00.000Z',
+    createId: createIdGenerator('expanded-2'),
+  });
+
+  const savedKeywords = db
+    .prepare(`
+      SELECT id, keyword, source_type, is_active, display_order
+      FROM target_keyword
+      WHERE monitoring_target_id = ? AND source_type = ?
+      ORDER BY display_order
+    `)
+    .all('target-1', expandedTargetKeywordSourceType)
+    .map(normalizeRow);
+
+  assert.deepEqual(targetKeyword, {
+    id: 'expanded-2',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme litigation',
+    sourceType: expandedTargetKeywordSourceType,
+    isActive: defaultTargetKeywordIsActive,
+    displayOrder: 1,
+  });
+  assert.deepEqual(savedKeywords, [
+    {
+      id: 'expanded-1',
+      keyword: 'Acme scandal',
+      source_type: expandedTargetKeywordSourceType,
+      is_active: defaultTargetKeywordIsActive,
+      display_order: 0,
+    },
+    {
+      id: 'expanded-2',
+      keyword: 'Acme litigation',
+      source_type: expandedTargetKeywordSourceType,
+      is_active: defaultTargetKeywordIsActive,
+      display_order: 1,
+    },
+  ]);
+
+  db.close();
+});
+
+test('disableTargetKeyword removes inactive keywords from collector input', () => {
+  const db = createDatabase();
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertTargetKeyword(db, {
+    id: 'seed-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Holdings',
+    sourceType: seedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'expanded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme scandal',
+    sourceType: expandedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'expanded-2',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme lawsuit',
+    sourceType: expandedTargetKeywordSourceType,
+    displayOrder: 1,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Jobs',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-2',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Careers',
+    sourceType: excludedTargetKeywordSourceType,
+    isActive: 0,
+    displayOrder: 1,
+  });
+
+  const disabledKeyword = disableTargetKeyword({
+    db,
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    targetKeywordId: 'expanded-2',
+    userId: 'user-1',
+    now: () => '2026-03-30T14:15:00.000Z',
+  });
+  const collectorInput = getMonitoringTargetCollectorInput({
+    db,
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+  });
+
+  assert.deepEqual(disabledKeyword, {
+    id: 'expanded-2',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme lawsuit',
+    sourceType: expandedTargetKeywordSourceType,
+    isActive: 0,
+    displayOrder: 1,
+  });
+  assert.deepEqual(collectorInput, {
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    seedKeywords: [
+      {
+        id: 'seed-1',
+        keyword: 'Acme Holdings',
+        sourceType: seedTargetKeywordSourceType,
+        isActive: defaultTargetKeywordIsActive,
+        displayOrder: 0,
+      },
+    ],
+    expandedKeywords: [
+      {
+        id: 'expanded-1',
+        keyword: 'Acme scandal',
+        sourceType: expandedTargetKeywordSourceType,
+        isActive: defaultTargetKeywordIsActive,
+        displayOrder: 0,
+      },
+    ],
+    excludedKeywords: [
+      {
+        id: 'excluded-1',
+        keyword: 'Acme Jobs',
+        sourceType: excludedTargetKeywordSourceType,
+        isActive: defaultTargetKeywordIsActive,
+        displayOrder: 0,
+      },
+    ],
+  });
+
+  db.close();
+});
+
+test('removeTargetKeyword deletes the keyword and compacts display order for the source type', () => {
+  const db = createDatabase();
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertTargetKeyword(db, {
+    id: 'expanded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme scandal',
+    sourceType: expandedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'expanded-2',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme lawsuit',
+    sourceType: expandedTargetKeywordSourceType,
+    displayOrder: 1,
+  });
+  insertTargetKeyword(db, {
+    id: 'expanded-3',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme investigation',
+    sourceType: expandedTargetKeywordSourceType,
+    displayOrder: 2,
+  });
+
+  const removedKeyword = removeTargetKeyword({
+    db,
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    targetKeywordId: 'expanded-2',
+    userId: 'user-1',
+    now: () => '2026-03-30T14:30:00.000Z',
+  });
+
+  const savedKeywords = db
+    .prepare(`
+      SELECT id, keyword, source_type, display_order
+      FROM target_keyword
+      WHERE monitoring_target_id = ? AND source_type = ?
+      ORDER BY display_order
+    `)
+    .all('target-1', expandedTargetKeywordSourceType)
+    .map(normalizeRow);
+
+  assert.deepEqual(removedKeyword, {
+    id: 'expanded-2',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme lawsuit',
+    sourceType: expandedTargetKeywordSourceType,
+  });
+  assert.deepEqual(savedKeywords, [
+    {
+      id: 'expanded-1',
+      keyword: 'Acme scandal',
+      source_type: expandedTargetKeywordSourceType,
+      display_order: 0,
+    },
+    {
+      id: 'expanded-3',
+      keyword: 'Acme investigation',
+      source_type: expandedTargetKeywordSourceType,
+      display_order: 1,
+    },
+  ]);
+
+  db.close();
+});
+
+test('reorderTargetKeywords rewrites display order within a single source type', () => {
+  const db = createDatabase();
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertTargetKeyword(db, {
+    id: 'seed-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Holdings',
+    sourceType: seedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Jobs',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-2',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Careers',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 1,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-3',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Internship',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 2,
+  });
+
+  const reorderedKeywords = reorderTargetKeywords({
+    db,
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    userId: 'user-1',
+    sourceType: excludedTargetKeywordSourceType,
+    keywordIds: ['excluded-3', 'excluded-1', 'excluded-2'],
+    now: () => '2026-03-30T14:45:00.000Z',
+  });
+
+  const savedExcludedKeywords = db
+    .prepare(`
+      SELECT id, keyword, source_type, is_active, display_order
+      FROM target_keyword
+      WHERE monitoring_target_id = ? AND source_type = ?
+      ORDER BY display_order
+    `)
+    .all('target-1', excludedTargetKeywordSourceType)
+    .map(normalizeRow);
+  const savedSeedKeyword = db
+    .prepare(`
+      SELECT id, source_type, display_order
+      FROM target_keyword
+      WHERE monitoring_target_id = ? AND id = ?
+    `)
+    .get('target-1', 'seed-1');
+
+  assert.deepEqual(reorderedKeywords, {
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    sourceType: excludedTargetKeywordSourceType,
+    keywords: [
+      {
+        id: 'excluded-3',
+        keyword: 'Acme Internship',
+        sourceType: excludedTargetKeywordSourceType,
+        isActive: defaultTargetKeywordIsActive,
+        displayOrder: 0,
+      },
+      {
+        id: 'excluded-1',
+        keyword: 'Acme Jobs',
+        sourceType: excludedTargetKeywordSourceType,
+        isActive: defaultTargetKeywordIsActive,
+        displayOrder: 1,
+      },
+      {
+        id: 'excluded-2',
+        keyword: 'Acme Careers',
+        sourceType: excludedTargetKeywordSourceType,
+        isActive: defaultTargetKeywordIsActive,
+        displayOrder: 2,
+      },
+    ],
+  });
+  assert.deepEqual(savedExcludedKeywords, [
+    {
+      id: 'excluded-3',
+      keyword: 'Acme Internship',
+      source_type: excludedTargetKeywordSourceType,
+      is_active: defaultTargetKeywordIsActive,
+      display_order: 0,
+    },
+    {
+      id: 'excluded-1',
+      keyword: 'Acme Jobs',
+      source_type: excludedTargetKeywordSourceType,
+      is_active: defaultTargetKeywordIsActive,
+      display_order: 1,
+    },
+    {
+      id: 'excluded-2',
+      keyword: 'Acme Careers',
+      source_type: excludedTargetKeywordSourceType,
+      is_active: defaultTargetKeywordIsActive,
+      display_order: 2,
+    },
+  ]);
+  assert.deepEqual(normalizeRow(savedSeedKeyword), {
+    id: 'seed-1',
+    source_type: seedTargetKeywordSourceType,
+    display_order: 0,
+  });
+
+  db.close();
+});
+
+test('reorderTargetKeywords rejects keyword lists that do not match the source type set', () => {
+  const db = createDatabase();
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Jobs',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 0,
+  });
+  insertTargetKeyword(db, {
+    id: 'excluded-2',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Careers',
+    sourceType: excludedTargetKeywordSourceType,
+    displayOrder: 1,
+  });
+
+  assert.throws(
+    () =>
+      reorderTargetKeywords({
+        db,
+        workspaceId: 'workspace-1',
+        monitoringTargetId: 'target-1',
+        userId: 'user-1',
+        sourceType: excludedTargetKeywordSourceType,
+        keywordIds: ['excluded-1'],
+      }),
+    (error) => {
+      assert.ok(error instanceof MonitoringTargetServiceError);
+      assert.equal(error.code, 'TARGET_KEYWORD_REORDER_INVALID');
+      return true;
+    },
+  );
 
   db.close();
 });
