@@ -3,10 +3,19 @@
 const { randomUUID } = require('node:crypto');
 
 const {
+  activeMonitoringTargetStatus,
   defaultMonitoringTargetRiskThreshold,
   defaultMonitoringTargetStatus,
+  monitoringTargetAwaitingActivationStatus,
+  monitoringTargetReadyForReviewStatus,
   monitoringTargetTypes,
 } = require('../db/schema/monitoring-target.cjs');
+const {
+  monitoringTargetMatchReviewDecision,
+  monitoringTargetMismatchReviewDecision,
+  monitoringTargetPartialMatchReviewDecision,
+  monitoringTargetReviewDecisions,
+} = require('../db/schema/monitoring-target-review.cjs');
 const {
   defaultTargetKeywordIsActive,
   seedTargetKeywordSourceType,
@@ -98,6 +107,19 @@ function normalizeSeedKeywords(seedKeywords) {
   );
 }
 
+function normalizeMonitoringTargetReviewDecision(decision) {
+  const normalizedDecision = normalizeRequiredString(decision, 'decision').toLowerCase();
+
+  if (!monitoringTargetReviewDecisions.includes(normalizedDecision)) {
+    throw new MonitoringTargetServiceError(
+      'INVALID_INPUT',
+      `decision must be one of: ${monitoringTargetReviewDecisions.join(', ')}`,
+    );
+  }
+
+  return normalizedDecision;
+}
+
 function defaultNow() {
   return new Date().toISOString();
 }
@@ -132,6 +154,34 @@ function getMembership(db, workspaceId, userId) {
       WHERE workspace_id = ? AND user_id = ?
     `)
     .get(workspaceId, userId);
+}
+
+function getMonitoringTarget(db, workspaceId, monitoringTargetId) {
+  return db
+    .prepare(`
+      SELECT id, workspace_id, status
+      FROM monitoring_target
+      WHERE workspace_id = ? AND id = ?
+    `)
+    .get(workspaceId, monitoringTargetId);
+}
+
+function getMonitoringTargetReview(db, workspaceId, monitoringTargetId) {
+  return db
+    .prepare(`
+      SELECT id, review_decision, reviewed_by_membership_id, reviewed_at, activated_by_membership_id, activated_at
+      FROM monitoring_target_review
+      WHERE workspace_id = ? AND monitoring_target_id = ?
+    `)
+    .get(workspaceId, monitoringTargetId);
+}
+
+function updateMonitoringTargetStatus(db, workspaceId, monitoringTargetId, status, updatedAt) {
+  db.prepare(`
+    UPDATE monitoring_target
+    SET status = ?, updated_at = ?
+    WHERE workspace_id = ? AND id = ?
+  `).run(status, updatedAt, workspaceId, monitoringTargetId);
 }
 
 function createMonitoringTarget({
@@ -240,7 +290,226 @@ function createMonitoringTarget({
   });
 }
 
+function saveMonitoringTargetReviewDecision({
+  db,
+  workspaceId,
+  monitoringTargetId,
+  userId,
+  decision,
+  now = defaultNow,
+  createId = defaultCreateId,
+}) {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, 'workspaceId');
+  const normalizedMonitoringTargetId = normalizeRequiredString(
+    monitoringTargetId,
+    'monitoringTargetId',
+  );
+  const normalizedUserId = normalizeRequiredString(userId, 'userId');
+  const normalizedDecision = normalizeMonitoringTargetReviewDecision(decision);
+
+  const membership = getMembership(db, normalizedWorkspaceId, normalizedUserId);
+
+  if (!membership || membership.status !== ACTIVE_MEMBERSHIP_STATUS) {
+    throw new MonitoringTargetServiceError(
+      'WORKSPACE_MEMBER_FORBIDDEN',
+      'Only active workspace members can review monitoring targets',
+    );
+  }
+
+  const monitoringTarget = getMonitoringTarget(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+
+  if (!monitoringTarget) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_NOT_FOUND',
+      'Monitoring target does not exist in the workspace',
+    );
+  }
+
+  if (
+    monitoringTarget.status !== monitoringTargetReadyForReviewStatus &&
+    monitoringTarget.status !== monitoringTargetAwaitingActivationStatus
+  ) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_STATUS_INVALID',
+      `Monitoring target status ${monitoringTarget.status} cannot save a review decision`,
+    );
+  }
+
+  return runInTransaction(db, () => {
+    const reviewedAt = now();
+    const nextStatus =
+      normalizedDecision === monitoringTargetMismatchReviewDecision
+        ? defaultMonitoringTargetStatus
+        : monitoringTargetAwaitingActivationStatus;
+    const existingReview = getMonitoringTargetReview(
+      db,
+      normalizedWorkspaceId,
+      normalizedMonitoringTargetId,
+    );
+    const reviewId = existingReview ? existingReview.id : createId();
+
+    db.prepare(`
+      INSERT INTO monitoring_target_review (
+        id,
+        workspace_id,
+        monitoring_target_id,
+        review_decision,
+        reviewed_by_membership_id,
+        reviewed_at,
+        activated_by_membership_id,
+        activated_at,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+      ON CONFLICT (workspace_id, monitoring_target_id) DO UPDATE SET
+        review_decision = excluded.review_decision,
+        reviewed_by_membership_id = excluded.reviewed_by_membership_id,
+        reviewed_at = excluded.reviewed_at,
+        activated_by_membership_id = NULL,
+        activated_at = NULL,
+        updated_at = excluded.updated_at
+    `).run(
+      reviewId,
+      normalizedWorkspaceId,
+      normalizedMonitoringTargetId,
+      normalizedDecision,
+      membership.id,
+      reviewedAt,
+      reviewedAt,
+      reviewedAt,
+    );
+
+    updateMonitoringTargetStatus(
+      db,
+      normalizedWorkspaceId,
+      normalizedMonitoringTargetId,
+      nextStatus,
+      reviewedAt,
+    );
+
+    return {
+      id: reviewId,
+      workspaceId: normalizedWorkspaceId,
+      monitoringTargetId: normalizedMonitoringTargetId,
+      reviewDecision: normalizedDecision,
+      reviewedByMembershipId: membership.id,
+      reviewedAt,
+      status: nextStatus,
+    };
+  });
+}
+
+function activateMonitoringTarget({
+  db,
+  workspaceId,
+  monitoringTargetId,
+  userId,
+  now = defaultNow,
+}) {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, 'workspaceId');
+  const normalizedMonitoringTargetId = normalizeRequiredString(
+    monitoringTargetId,
+    'monitoringTargetId',
+  );
+  const normalizedUserId = normalizeRequiredString(userId, 'userId');
+
+  const membership = getMembership(db, normalizedWorkspaceId, normalizedUserId);
+
+  if (!membership || membership.status !== ACTIVE_MEMBERSHIP_STATUS) {
+    throw new MonitoringTargetServiceError(
+      'WORKSPACE_MEMBER_FORBIDDEN',
+      'Only active workspace members can activate monitoring targets',
+    );
+  }
+
+  const monitoringTarget = getMonitoringTarget(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+
+  if (!monitoringTarget) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_NOT_FOUND',
+      'Monitoring target does not exist in the workspace',
+    );
+  }
+
+  if (monitoringTarget.status !== monitoringTargetAwaitingActivationStatus) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_STATUS_INVALID',
+      `Monitoring target status ${monitoringTarget.status} cannot be activated`,
+    );
+  }
+
+  const review = getMonitoringTargetReview(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+
+  if (!review) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_REVIEW_REQUIRED',
+      'A saved review decision is required before activation',
+    );
+  }
+
+  if (
+    review.review_decision !== monitoringTargetMatchReviewDecision &&
+    review.review_decision !== monitoringTargetPartialMatchReviewDecision
+  ) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_REVIEW_DECISION_INVALID',
+      'Only match or partial_match review decisions can be activated',
+    );
+  }
+
+  return runInTransaction(db, () => {
+    const activatedAt = now();
+
+    db.prepare(`
+      UPDATE monitoring_target_review
+      SET activated_by_membership_id = ?,
+          activated_at = ?,
+          updated_at = ?
+      WHERE workspace_id = ? AND monitoring_target_id = ?
+    `).run(
+      membership.id,
+      activatedAt,
+      activatedAt,
+      normalizedWorkspaceId,
+      normalizedMonitoringTargetId,
+    );
+
+    updateMonitoringTargetStatus(
+      db,
+      normalizedWorkspaceId,
+      normalizedMonitoringTargetId,
+      activeMonitoringTargetStatus,
+      activatedAt,
+    );
+
+    return {
+      id: review.id,
+      workspaceId: normalizedWorkspaceId,
+      monitoringTargetId: normalizedMonitoringTargetId,
+      reviewDecision: review.review_decision,
+      activatedByMembershipId: membership.id,
+      activatedAt,
+      status: activeMonitoringTargetStatus,
+    };
+  });
+}
+
 module.exports = {
   MonitoringTargetServiceError,
+  activateMonitoringTarget,
   createMonitoringTarget,
+  saveMonitoringTargetReviewDecision,
 };

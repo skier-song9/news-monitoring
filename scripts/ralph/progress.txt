@@ -12,6 +12,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For backend write flows, wrap multi-table SQLite mutations in an explicit transaction helper and inject `now`/ID/token generators so `node:test` coverage stays deterministic without mocking the database.
 - For workspace-owned backend writes, gate creation on an `active` `workspace_membership` row and persist seeded child records in the same transaction, using request order for fields like `display_order`.
 - For background jobs that call external services, inject the search/LLM adapters plus `now`/ID generators, and keep the final SQLite persistence step in a short transaction so reruns stay deterministic and easy to test.
+- When a target discovery rerun regenerates profile data, clear any saved review state in the same transaction so stale mismatch or approval decisions do not leak into the next review cycle.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -83,4 +84,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keep background job integrations dependency-injected so `node:test` can exercise the real database flow without network mocking, then persist profile data and regenerated keywords in one transaction.
   - Gotchas encountered: discovery reruns should reuse the existing profile row and delete only prior `expanded` keywords so seed and excluded terms remain intact for review.
   - Useful context: there are still no nearby `AGENTS.md` files to update, so the reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 22:33:59 KST - US-009
+- Implemented review and activation backend flows that save `match`, `partial_match`, and `mismatch` decisions, move approved targets into `awaiting_activation`, and require a separate activation call before a target becomes `active`.
+- Added persistent `monitoring_target_review` state plus discovery-job cleanup so mismatch-driven reruns clear stale review decisions before generating a fresh profile.
+- Files changed: `db/migrations/0007_monitoring_target_review_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/monitoring-target-discovery-job.cjs`, `src/backend/monitoring-target-service.cjs`, `src/db/schema/monitoring-target-review.cjs`, `src/db/schema/monitoring-target.cjs`, `tests/monitoring-target-discovery-job.test.cjs`, `tests/monitoring-target-review-schema.test.cjs`, `tests/monitoring-target-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep user review/activation state in a dedicated workspace-scoped table so lifecycle metadata can be reset independently from the generated target profile.
+  - Gotchas encountered: if a target is reopened after `mismatch`, the next discovery run must delete the old review row or the UI/backend will inherit stale approval state for a new profile.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 42 passing tests.
 ---

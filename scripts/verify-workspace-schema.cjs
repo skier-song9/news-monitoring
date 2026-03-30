@@ -83,6 +83,7 @@ function verifyWorkspaceSchema() {
     'alert_policy',
     'monitoring_target',
     'monitoring_target_profile',
+    'monitoring_target_review',
     'target_keyword',
     'user_account',
     'workspace',
@@ -122,6 +123,7 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'monitoring_target', ['workspace_id', 'type'], false);
   requireIndex(db, 'monitoring_target_profile', ['workspace_id', 'monitoring_target_id'], true);
   requireIndex(db, 'monitoring_target_profile', ['workspace_id', 'generated_at'], false);
+  requireIndex(db, 'monitoring_target_review', ['workspace_id', 'monitoring_target_id'], true);
   requireIndex(db, 'target_keyword', ['monitoring_target_id', 'is_active', 'source_type', 'display_order'], false);
   requireIndex(db, 'target_keyword', ['monitoring_target_id', 'source_type'], false);
   requireIndex(db, 'workspace_membership', ['workspace_id', 'user_id'], true);
@@ -183,6 +185,19 @@ function verifyWorkspaceSchema() {
   requireCompositeForeignKey(db, 'monitoring_target_profile', 'monitoring_target', [
     { from: 'workspace_id', to: 'workspace_id' },
     { from: 'monitoring_target_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'monitoring_target_review', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'monitoring_target_review', 'monitoring_target', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'monitoring_target_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'monitoring_target_review', 'workspace_membership', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'reviewed_by_membership_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'monitoring_target_review', 'workspace_membership', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'activated_by_membership_id', to: 'id' },
   ]);
   requireCompositeForeignKey(db, 'target_keyword', 'monitoring_target', [{ from: 'monitoring_target_id', to: 'id' }]);
   requireCompositeForeignKey(db, 'monitoring_target', 'workspace', [{ from: 'workspace_id', to: 'id' }]);

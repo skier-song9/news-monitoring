@@ -32,6 +32,20 @@ function insertWorkspace(db, { id, slug, name }) {
   `).run(id, slug, name);
 }
 
+function insertUser(db, { id, email, displayName }) {
+  db.prepare(`
+    INSERT INTO user_account (id, email, display_name)
+    VALUES (?, ?, ?)
+  `).run(id, email, displayName);
+}
+
+function insertMembership(db, { id, workspaceId, userId, role = 'member', status = 'active' }) {
+  db.prepare(`
+    INSERT INTO workspace_membership (id, workspace_id, user_id, role, status)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, workspaceId, userId, role, status);
+}
+
 function insertMonitoringTarget(
   db,
   {
@@ -120,6 +134,30 @@ function insertProfile(
     modelVersion,
     generatedAt,
   );
+}
+
+function insertReview(
+  db,
+  {
+    id,
+    workspaceId,
+    monitoringTargetId,
+    reviewDecision,
+    reviewedByMembershipId,
+    reviewedAt,
+  },
+) {
+  db.prepare(`
+    INSERT INTO monitoring_target_review (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      review_decision,
+      reviewed_by_membership_id,
+      reviewed_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, workspaceId, monitoringTargetId, reviewDecision, reviewedByMembershipId, reviewedAt);
 }
 
 function createIdGenerator(...ids) {
@@ -369,7 +407,7 @@ test('runMonitoringTargetDiscoveryJob stores a generated profile and ready-for-r
   db.close();
 });
 
-test('runMonitoringTargetDiscoveryJob updates an existing profile and replaces prior expanded keywords', async () => {
+test('runMonitoringTargetDiscoveryJob updates an existing profile, replaces expanded keywords, and clears stale review state', async () => {
   const db = createDatabase();
 
   insertWorkspace(db, {
@@ -377,11 +415,21 @@ test('runMonitoringTargetDiscoveryJob updates an existing profile and replaces p
     slug: 'acme',
     name: 'Acme',
   });
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
   insertMonitoringTarget(db, {
     id: 'target-1',
     workspaceId: 'workspace-1',
     displayName: 'Acme Holdings',
-    status: monitoringTargetReadyForReviewStatus,
+    status: 'review_required',
   });
   insertKeyword(db, {
     id: 'seed-1',
@@ -404,6 +452,14 @@ test('runMonitoringTargetDiscoveryJob updates an existing profile and replaces p
     searchResults: [],
     modelVersion: 'gpt-old',
     generatedAt: '2026-03-29T12:00:00.000Z',
+  });
+  insertReview(db, {
+    id: 'review-existing',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    reviewDecision: 'mismatch',
+    reviewedByMembershipId: 'membership-1',
+    reviewedAt: '2026-03-30T12:30:00.000Z',
   });
 
   const discoveryResult = await runMonitoringTargetDiscoveryJob({
@@ -442,6 +498,13 @@ test('runMonitoringTargetDiscoveryJob updates an existing profile and replaces p
     `)
     .all('target-1', expandedTargetKeywordSourceType)
     .map(normalizeRow);
+  const savedReview = db
+    .prepare(`
+      SELECT id
+      FROM monitoring_target_review
+      WHERE workspace_id = ? AND monitoring_target_id = ?
+    `)
+    .get('workspace-1', 'target-1');
 
   assert.deepEqual(discoveryResult.expandedKeywords, [
     {
@@ -466,6 +529,7 @@ test('runMonitoringTargetDiscoveryJob updates an existing profile and replaces p
       keyword: 'New expansion',
     },
   ]);
+  assert.equal(savedReview, undefined);
 
   db.close();
 });

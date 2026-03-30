@@ -196,6 +196,13 @@ function updateMonitoringTargetStatus(db, monitoringTargetId, status, updatedAt)
   `).run(status, updatedAt, monitoringTargetId);
 }
 
+function clearMonitoringTargetReview(db, workspaceId, monitoringTargetId) {
+  db.prepare(`
+    DELETE FROM monitoring_target_review
+    WHERE workspace_id = ? AND monitoring_target_id = ?
+  `).run(workspaceId, monitoringTargetId);
+}
+
 async function runMonitoringTargetDiscoveryJob({
   db,
   monitoringTargetId,
@@ -343,6 +350,12 @@ async function runMonitoringTargetDiscoveryJob({
       DELETE FROM target_keyword
       WHERE monitoring_target_id = ? AND source_type = ?
     `).run(normalizedMonitoringTarget.id, expandedTargetKeywordSourceType);
+
+    clearMonitoringTargetReview(
+      db,
+      normalizedMonitoringTarget.workspaceId,
+      normalizedMonitoringTarget.id,
+    );
 
     const expandedKeywords = generatedProfile.expandedKeywords.map((keyword, displayOrder) => {
       const keywordId = createId();
