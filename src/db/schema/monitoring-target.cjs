@@ -1,11 +1,13 @@
 'use strict';
 
 const defaultMonitoringTargetStatus = 'review_required';
+const monitoringTargetProfileInProgressStatus = 'profile_in_progress';
+const monitoringTargetReadyForReviewStatus = 'ready_for_review';
 
 const monitoringTargetStatuses = [
   defaultMonitoringTargetStatus,
-  'profile_in_progress',
-  'ready_for_review',
+  monitoringTargetProfileInProgressStatus,
+  monitoringTargetReadyForReviewStatus,
   'awaiting_activation',
   'active',
   'paused',
@@ -18,6 +20,8 @@ const defaultMonitoringTargetRiskThreshold = 70;
 module.exports = {
   defaultMonitoringTargetRiskThreshold,
   defaultMonitoringTargetStatus,
+  monitoringTargetProfileInProgressStatus,
+  monitoringTargetReadyForReviewStatus,
   monitoringTargetStatuses,
   monitoringTargetTypes,
 };

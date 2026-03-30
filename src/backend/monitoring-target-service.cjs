@@ -7,10 +7,12 @@ const {
   defaultMonitoringTargetStatus,
   monitoringTargetTypes,
 } = require('../db/schema/monitoring-target.cjs');
-const { defaultTargetKeywordIsActive } = require('../db/schema/target-keyword.cjs');
+const {
+  defaultTargetKeywordIsActive,
+  seedTargetKeywordSourceType,
+} = require('../db/schema/target-keyword.cjs');
 
 const ACTIVE_MEMBERSHIP_STATUS = 'active';
-const SEED_KEYWORD_SOURCE_TYPE = 'seed';
 
 class MonitoringTargetServiceError extends Error {
   constructor(code, message) {
@@ -209,7 +211,7 @@ function createMonitoringTarget({
         keywordId,
         monitoringTargetId,
         keyword,
-        SEED_KEYWORD_SOURCE_TYPE,
+        seedTargetKeywordSourceType,
         defaultTargetKeywordIsActive,
         displayOrder,
         createdAt,
@@ -219,7 +221,7 @@ function createMonitoringTarget({
       return {
         id: keywordId,
         keyword,
-        sourceType: SEED_KEYWORD_SOURCE_TYPE,
+        sourceType: seedTargetKeywordSourceType,
         isActive: defaultTargetKeywordIsActive,
         displayOrder,
       };
