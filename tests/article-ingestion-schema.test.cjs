@@ -190,16 +190,119 @@ test('article candidate portal hits and article URLs are deduplicated for idempo
   assert.throws(
     () =>
       db.exec(`
-        INSERT INTO article (id, workspace_id, body_hash)
-        VALUES ('article-4', 'workspace-1', 'body-hash-1');
+        INSERT INTO article (id, workspace_id, normalized_title_hash, body_hash)
+        VALUES ('article-4', 'workspace-1', 'title-hash-1', 'body-hash-1');
       `),
-    /UNIQUE constraint failed: article\.workspace_id, article\.body_hash/u,
+    /UNIQUE constraint failed: article\.workspace_id, article\.normalized_title_hash, article\.body_hash/u,
   );
 
   db.exec(`
-    INSERT INTO article (id, workspace_id, normalized_title_hash)
-    VALUES ('article-5', 'workspace-1', 'title-hash-1');
+    INSERT INTO article (id, workspace_id, normalized_title_hash, body_hash)
+    VALUES ('article-5', 'workspace-1', 'title-hash-2', 'body-hash-1');
   `);
+
+  db.close();
+});
+
+test('article content rows stay tenant-scoped and enforce non-negative view counts', () => {
+  const db = createDatabase();
+
+  db.exec(`
+    INSERT INTO workspace (id, slug, name)
+    VALUES ('workspace-1', 'acme', 'Acme'),
+           ('workspace-2', 'globex', 'Globex');
+
+    INSERT INTO article (id, workspace_id, source_url)
+    VALUES ('article-1', 'workspace-1', 'https://source.example.com/articles/1'),
+           ('article-2', 'workspace-2', 'https://source.example.com/articles/2');
+
+    INSERT INTO article_content (
+      article_id,
+      workspace_id,
+      title,
+      body_text,
+      author_name,
+      publisher_name,
+      published_at,
+      view_count,
+      fetched_at
+    )
+    VALUES (
+      'article-1',
+      'workspace-1',
+      'Acme source headline',
+      'Body text',
+      'Jane Reporter',
+      'Acme Daily',
+      '2026-03-30T13:00:00.000Z',
+      321,
+      '2026-03-30T13:05:00.000Z'
+    );
+  `);
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_content (
+          article_id,
+          workspace_id,
+          title,
+          body_text,
+          fetched_at
+        )
+        VALUES (
+          'article-2',
+          'workspace-1',
+          'Cross workspace title',
+          'Cross workspace body',
+          '2026-03-30T13:10:00.000Z'
+        );
+      `),
+    /FOREIGN KEY constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_content (
+          article_id,
+          workspace_id,
+          title,
+          body_text,
+          view_count,
+          fetched_at
+        )
+        VALUES (
+          'article-2',
+          'workspace-2',
+          'Negative views title',
+          'Negative views body',
+          -1,
+          '2026-03-30T13:12:00.000Z'
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  const articleContent = db
+    .prepare(`
+      SELECT article_id, workspace_id, title, body_text, author_name, publisher_name, published_at, view_count, fetched_at
+      FROM article_content
+      WHERE article_id = ?
+    `)
+    .get('article-1');
+
+  assert.deepEqual({ ...articleContent }, {
+    article_id: 'article-1',
+    workspace_id: 'workspace-1',
+    title: 'Acme source headline',
+    body_text: 'Body text',
+    author_name: 'Jane Reporter',
+    publisher_name: 'Acme Daily',
+    published_at: '2026-03-30T13:00:00.000Z',
+    view_count: 321,
+    fetched_at: '2026-03-30T13:05:00.000Z',
+  });
 
   db.close();
 });

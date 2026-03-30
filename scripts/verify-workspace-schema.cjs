@@ -76,6 +76,7 @@ function verifyWorkspaceSchema() {
 
   for (const tableName of [
     'article',
+    'article_content',
     'article_analysis',
     'article_candidate',
     'article_candidate_portal_metadata',
@@ -99,9 +100,11 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'article', ['workspace_id', 'id'], true);
   requireIndex(db, 'article', ['workspace_id', 'source_url'], true);
   requireIndex(db, 'article', ['workspace_id', 'canonical_url'], true);
-  requireIndex(db, 'article', ['workspace_id', 'body_hash'], true);
+  requireIndex(db, 'article', ['workspace_id', 'body_hash'], false);
   requireIndex(db, 'article', ['workspace_id', 'ingestion_status'], false);
-  requireIndex(db, 'article', ['workspace_id', 'normalized_title_hash', 'body_hash'], false);
+  requireIndex(db, 'article', ['workspace_id', 'normalized_title_hash', 'body_hash'], true);
+  requireIndex(db, 'article_content', ['workspace_id', 'article_id'], true);
+  requireIndex(db, 'article_content', ['workspace_id', 'published_at'], false);
   requireIndex(db, 'article_analysis', ['workspace_id', 'id'], true);
   requireIndex(db, 'article_analysis', ['workspace_id', 'monitoring_target_id', 'article_id'], true);
   requireIndex(db, 'article_analysis', ['workspace_id', 'risk_band', 'risk_score'], false);
@@ -140,6 +143,11 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'workspace_invitation', ['workspace_id', 'status'], false);
 
   requireCompositeForeignKey(db, 'article', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'article_content', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'article_content', 'article', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'article_id', to: 'id' },
+  ]);
   requireCompositeForeignKey(db, 'article_analysis', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
   requireCompositeForeignKey(db, 'article_analysis', 'article', [
     { from: 'workspace_id', to: 'workspace_id' },

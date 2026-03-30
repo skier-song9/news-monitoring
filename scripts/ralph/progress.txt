@@ -13,6 +13,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For backend write flows, wrap multi-table SQLite mutations in an explicit transaction helper and inject `now`/ID/token generators so `node:test` coverage stays deterministic without mocking the database.
 - For workspace-owned backend writes, gate creation on an `active` `workspace_membership` row and persist seeded child records in the same transaction, using request order for fields like `display_order`.
 - For background jobs that call external services, inject the search/LLM adapters plus `now`/ID generators, and keep the final SQLite persistence step in a short transaction so reruns stay deterministic and easy to test.
+- For canonical article ingestion, keep dedupe identity in `article` and fetched body/source fields in a 1:1 `article_content` table so rerunnable migrations can add content storage without rebuilding the base article table.
 - For ordered keyword collections, treat `display_order` as scoped to a single `source_type`, and make reorder flows rewrite the full ID set for that source in one transaction.
 - When a target discovery rerun regenerates profile data, clear any saved review state in the same transaction so stale mismatch or approval decisions do not leak into the next review cycle.
 ---
@@ -113,4 +114,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keep external portal adapters dependency-injected, then persist each portal batch in a short transaction so scheduled collectors stay deterministic under `node:test`.
   - Gotchas encountered: candidate refresh logic should reset retryable `failed` hits back to `pending` while preserving already `linked` candidates, otherwise reruns either strand retries or break canonical article links.
   - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 52 passing tests.
+---
+## 2026-03-30 23:02:01 KST - US-012
+- Implemented the original-article ingestion job that fetches pending or retryable candidates with source URLs, hashes normalized titles and bodies for canonical dedupe, stores article content metadata, and links candidates to the resolved canonical article row.
+- Added the `article_content` migration plus updated schema verification and tests for tenant scoping, hash-based dedupe behavior, canonical upserts, and retryable failure recording.
+- Files changed: `db/migrations/0009_article_content_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/original-article-ingestion-job.cjs`, `src/db/schema/article-ingestion.cjs`, `tests/article-ingestion-schema.test.cjs`, `tests/original-article-ingestion-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep canonical identity and dedupe keys on the base `article` row, then upsert fetched title/body/source metadata through a separate `article_content` row keyed by `(workspace_id, article_id)`.
+  - Gotchas encountered: body-hash uniqueness alone is too aggressive for canonical dedupe, so use a partial unique index on `(workspace_id, normalized_title_hash, body_hash)` and update the verifier/tests together when that contract changes.
+  - Useful context: the ingestion job accepts an injected `fetchOriginalArticle` adapter and passes through portal metadata from `article_candidate_portal_metadata`; there are still no nearby `AGENTS.md` files to update, this story had no UI surface, and `npm run check` passed with 57 passing tests.
 ---
