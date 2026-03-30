@@ -40,6 +40,7 @@ const alertEventStatuses = [
   'failed',
   'suppressed',
 ];
+const alertBatchStatuses = alertEventStatuses.slice();
 const alertDeliveryStatuses = ['pending', 'sent', 'failed', 'skipped'];
 const alertPolicyDefaultThreshold = 70;
 
@@ -56,6 +57,7 @@ function getArticleAnalysisRiskBand(riskScore) {
 }
 
 module.exports = {
+  alertBatchStatuses,
   alertChannels,
   alertDeliveryStatuses,
   alertEventStatuses,

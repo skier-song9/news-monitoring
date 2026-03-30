@@ -6,6 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 
 const { applyMigrations } = require('../src/db/migrations.cjs');
 const {
+  alertBatchStatuses,
   alertChannels,
   alertDeliveryStatuses,
   alertEventStatuses,
@@ -74,6 +75,42 @@ test('analysis and alert records use the shared defaults', () => {
 
     INSERT INTO alert_delivery_dispatch (workspace_id, alert_delivery_id)
     VALUES ('workspace-1', 'delivery-1');
+
+    INSERT INTO alert_batch (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      alert_policy_id,
+      highest_risk_alert_event_id,
+      article_count,
+      window_started_at,
+      window_ended_at
+    )
+    VALUES (
+      'batch-1',
+      'workspace-1',
+      'target-1',
+      'policy-1',
+      'event-1',
+      2,
+      '2026-03-30T12:00:00Z',
+      '2026-03-30T12:00:59Z'
+    );
+
+    INSERT INTO alert_batch_item (workspace_id, alert_batch_id, alert_event_id)
+    VALUES ('workspace-1', 'batch-1', 'event-1');
+
+    INSERT INTO alert_batch_delivery (
+      id,
+      workspace_id,
+      alert_batch_id,
+      alert_policy_id,
+      channel
+    )
+    VALUES ('batch-delivery-1', 'workspace-1', 'batch-1', 'policy-1', 'email');
+
+    INSERT INTO alert_batch_delivery_dispatch (workspace_id, alert_batch_delivery_id)
+    VALUES ('workspace-1', 'batch-delivery-1');
   `);
 
   const analysis = db
@@ -103,6 +140,26 @@ test('analysis and alert records use the shared defaults', () => {
   const deliveryDispatch = db
     .prepare('SELECT payload_reference, sent_at FROM alert_delivery_dispatch WHERE workspace_id = ? AND alert_delivery_id = ?')
     .get('workspace-1', 'delivery-1');
+  const batch = db
+    .prepare('SELECT status, dispatched_at FROM alert_batch WHERE id = ?')
+    .get('batch-1');
+  const batchItem = db
+    .prepare(`
+      SELECT workspace_id, alert_batch_id, alert_event_id
+      FROM alert_batch_item
+      WHERE workspace_id = ? AND alert_batch_id = ? AND alert_event_id = ?
+    `)
+    .get('workspace-1', 'batch-1', 'event-1');
+  const batchDelivery = db
+    .prepare('SELECT final_status FROM alert_batch_delivery WHERE id = ?')
+    .get('batch-delivery-1');
+  const batchDeliveryDispatch = db
+    .prepare(`
+      SELECT payload_reference, sent_at
+      FROM alert_batch_delivery_dispatch
+      WHERE workspace_id = ? AND alert_batch_delivery_id = ?
+    `)
+    .get('workspace-1', 'batch-delivery-1');
 
   assert.equal(analysis.relevance_score, null);
   assert.equal(analysis.topic_labels, '[]');
@@ -122,6 +179,16 @@ test('analysis and alert records use the shared defaults', () => {
   assert.equal(delivery.final_status, alertDeliveryStatuses[0]);
   assert.equal(deliveryDispatch.payload_reference, null);
   assert.equal(deliveryDispatch.sent_at, null);
+  assert.equal(batch.status, alertBatchStatuses[0]);
+  assert.equal(batch.dispatched_at, null);
+  assert.deepEqual({ ...batchItem }, {
+    workspace_id: 'workspace-1',
+    alert_batch_id: 'batch-1',
+    alert_event_id: 'event-1',
+  });
+  assert.equal(batchDelivery.final_status, alertDeliveryStatuses[0]);
+  assert.equal(batchDeliveryDispatch.payload_reference, null);
+  assert.equal(batchDeliveryDispatch.sent_at, null);
 
   db.close();
 });
@@ -525,6 +592,181 @@ test('analysis and alert schema enforce score, scope, and delivery constraints',
         );
       `),
     /FOREIGN KEY constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_batch (
+          id,
+          workspace_id,
+          monitoring_target_id,
+          alert_policy_id,
+          highest_risk_alert_event_id,
+          article_count,
+          window_started_at,
+          window_ended_at
+        )
+        VALUES (
+          'batch-invalid-count',
+          'workspace-1',
+          'target-1',
+          'policy-target',
+          'event-1',
+          1,
+          '2026-03-30T12:00:00Z',
+          '2026-03-30T12:00:59Z'
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_batch (
+          id,
+          workspace_id,
+          monitoring_target_id,
+          alert_policy_id,
+          highest_risk_alert_event_id,
+          article_count,
+          status,
+          window_started_at,
+          window_ended_at
+        )
+        VALUES (
+          'batch-invalid-status',
+          'workspace-1',
+          'target-1',
+          'policy-target',
+          'event-1',
+          2,
+          'queued',
+          '2026-03-30T12:00:00Z',
+          '2026-03-30T12:00:59Z'
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  db.exec(`
+    INSERT INTO alert_batch (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      alert_policy_id,
+      highest_risk_alert_event_id,
+      article_count,
+      window_started_at,
+      window_ended_at
+    )
+    VALUES (
+      'batch-1',
+      'workspace-1',
+      'target-1',
+      'policy-target',
+      'event-1',
+      2,
+      '2026-03-30T12:00:00Z',
+      '2026-03-30T12:00:59Z'
+    );
+  `);
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_batch_item (
+          workspace_id,
+          alert_batch_id,
+          alert_event_id
+        )
+        VALUES (
+          'workspace-2',
+          'batch-1',
+          'event-1'
+        );
+      `),
+    /FOREIGN KEY constraint failed/u,
+  );
+
+  db.exec(`
+    INSERT INTO alert_batch_item (workspace_id, alert_batch_id, alert_event_id)
+    VALUES ('workspace-1', 'batch-1', 'event-1');
+  `);
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_batch_item (
+          workspace_id,
+          alert_batch_id,
+          alert_event_id
+        )
+        VALUES (
+          'workspace-1',
+          'batch-1',
+          'event-1'
+        );
+      `),
+    /UNIQUE constraint failed: alert_batch_item\.workspace_id, alert_batch_item\.alert_event_id/u,
+  );
+
+  db.exec(`
+    INSERT INTO alert_batch_delivery (
+      id,
+      workspace_id,
+      alert_batch_id,
+      alert_policy_id,
+      channel
+    )
+    VALUES (
+      'batch-delivery-1',
+      'workspace-1',
+      'batch-1',
+      'policy-target',
+      'slack'
+    );
+  `);
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_batch_delivery (
+          id,
+          workspace_id,
+          alert_batch_id,
+          alert_policy_id,
+          channel,
+          final_status
+        )
+        VALUES (
+          'batch-delivery-invalid-channel',
+          'workspace-1',
+          'batch-1',
+          'policy-target',
+          'push',
+          'sent'
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_batch_delivery_dispatch (
+          workspace_id,
+          alert_batch_delivery_id,
+          payload_reference
+        )
+        VALUES (
+          'workspace-1',
+          'batch-delivery-1',
+          '   '
+        );
+      `),
+    /CHECK constraint failed/u,
   );
 
   db.close();

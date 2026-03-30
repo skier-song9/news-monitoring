@@ -81,6 +81,10 @@ function verifyWorkspaceSchema() {
     'article_analysis_relevance_signal',
     'article_analysis_topic_label',
     'article_candidate',
+    'alert_batch',
+    'alert_batch_delivery',
+    'alert_batch_delivery_dispatch',
+    'alert_batch_item',
     'article_candidate_portal_metadata',
     'alert_delivery',
     'alert_delivery_dispatch',
@@ -128,6 +132,21 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'article_candidate', ['monitoring_target_id', 'portal_url'], true);
   requireIndex(db, 'article_candidate', ['workspace_id', 'ingestion_status'], false);
   requireIndex(db, 'article_candidate', ['workspace_id', 'source_url'], false);
+  requireIndex(db, 'alert_batch', ['workspace_id', 'id'], true);
+  requireIndex(db, 'alert_batch', ['workspace_id', 'status', 'created_at'], false);
+  requireIndex(
+    db,
+    'alert_batch',
+    ['workspace_id', 'monitoring_target_id', 'window_started_at', 'window_ended_at'],
+    false,
+  );
+  requireIndex(db, 'alert_batch_delivery', ['workspace_id', 'id'], true);
+  requireIndex(db, 'alert_batch_delivery', ['workspace_id', 'alert_batch_id', 'channel'], true);
+  requireIndex(db, 'alert_batch_delivery', ['workspace_id', 'final_status'], false);
+  requireIndex(db, 'alert_batch_delivery_dispatch', ['workspace_id', 'alert_batch_delivery_id'], true);
+  requireIndex(db, 'alert_batch_delivery_dispatch', ['workspace_id', 'sent_at'], false);
+  requireIndex(db, 'alert_batch_item', ['workspace_id', 'alert_event_id'], true);
+  requireIndex(db, 'alert_batch_item', ['workspace_id', 'alert_batch_id'], false);
   requireIndex(
     db,
     'article_candidate_portal_metadata',
@@ -206,6 +225,48 @@ function verifyWorkspaceSchema() {
   requireCompositeForeignKey(db, 'article_candidate', 'monitoring_target', [
     { from: 'workspace_id', to: 'workspace_id' },
     { from: 'monitoring_target_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'alert_batch', 'monitoring_target', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'monitoring_target_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch', 'alert_policy', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_policy_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch', 'alert_event', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'highest_risk_alert_event_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_delivery', 'workspace', [
+    { from: 'workspace_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_delivery', 'alert_batch', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_batch_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_delivery', 'alert_policy', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_policy_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_delivery_dispatch', 'workspace', [
+    { from: 'workspace_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_delivery_dispatch', 'alert_batch_delivery', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_batch_delivery_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_item', 'workspace', [
+    { from: 'workspace_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_item', 'alert_batch', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_batch_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_batch_item', 'alert_event', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_event_id', to: 'id' },
   ]);
   requireCompositeForeignKey(db, 'article_candidate_portal_metadata', 'workspace', [
     { from: 'workspace_id', to: 'id' },
