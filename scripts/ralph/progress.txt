@@ -25,6 +25,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For aggregate notification jobs derived from existing `alert_event` rows, keep batching state in additive side tables keyed back to source event IDs, and enforce a unique `(workspace_id, alert_event_id)` membership so reruns cannot rebatch the same immediate alert.
 - For article read APIs, treat `article_analysis` as the feed grain, use `article_analysis_topic_label` for topic filtering, and deserialize the ordered `article_analysis.topic_labels` JSON snapshot for the response payload.
 - Use `article_analysis.id` as the stable key for article detail and drilldown queries, because one canonical `article` can legitimately appear under multiple monitoring targets in the same workspace.
+- For analytics aggregations, query high-risk `article_analysis` rows with non-null `article_content.published_at`, normalize publisher/reporter labels case-insensitively, and return `articleAnalysisIds` with `articleIds` so drilldowns stay aligned with the feed grain.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -213,4 +214,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: article detail lookups should key off `article_analysis.id` and pull evidence from `article_analysis_relevance_signal`, since the same canonical `article` may need separate detail views per monitoring target.
   - Gotchas encountered: the only ingestion timestamp currently stored for detail queries is `article_content.fetched_at`, so detail responses need to surface that with `published_at` instead of assuming an `article.ingested_at` column exists.
   - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 90 passing tests.
+---
+## 2026-03-31 00:29:55 KST - US-022
+- Implemented `getArticleAnalyticsAggregates` to return high-risk topic, publisher, and reporter summaries over an optional target/date slice, with drilldown `articleAnalysisIds` and canonical `articleIds` for each aggregate row.
+- Added direct query-service tests covering multi-dimension aggregation, target filtering, workspace access control, date validation, case-insensitive publisher grouping, and exclusion of medium-risk or undated articles.
+- Files changed: `src/backend/article-analytics-query-service.cjs`, `tests/article-analytics-query-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: analytics queries in this repo should aggregate from `article_analysis` rather than `article`, because drilldowns and UI reads are target-specific.
+  - Gotchas encountered: publisher and reporter names are not normalized at ingestion time, so aggregation code must collapse them case-insensitively or rankings will split the same source into duplicate buckets.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 93 passing tests.
 ---
