@@ -16,6 +16,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For canonical article ingestion, keep dedupe identity in `article` and fetched body/source fields in a 1:1 `article_content` table so rerunnable migrations can add content storage without rebuilding the base article table.
 - For ordered keyword collections, treat `display_order` as scoped to a single `source_type`, and make reorder flows rewrite the full ID set for that source in one transaction.
 - When a target discovery rerun regenerates profile data, clear any saved review state in the same transaction so stale mismatch or approval decisions do not leak into the next review cycle.
+- For rerunnable analysis stages, keep one stable `article_analysis` row per `(workspace_id, monitoring_target_id, article_id)` and store fan-out evidence in a stage-specific side table so later enrichments can update their own fields without clobbering other analysis outputs.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -123,4 +124,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keep canonical identity and dedupe keys on the base `article` row, then upsert fetched title/body/source metadata through a separate `article_content` row keyed by `(workspace_id, article_id)`.
   - Gotchas encountered: body-hash uniqueness alone is too aggressive for canonical dedupe, so use a partial unique index on `(workspace_id, normalized_title_hash, body_hash)` and update the verifier/tests together when that contract changes.
   - Useful context: the ingestion job accepts an injected `fetchOriginalArticle` adapter and passes through portal metadata from `article_candidate_portal_metadata`; there are still no nearby `AGENTS.md` files to update, this story had no UI surface, and `npm run check` passed with 57 passing tests.
+---
+## 2026-03-30 23:12:15 KST - US-013
+- Implemented `runArticleRelevanceScoringJob` to score each distinct target/article pair whose canonical article ingestion is complete, reusing active collector keywords and upserting the relevance fields on `article_analysis`.
+- Added `article_analysis_relevance_signal` storage so matched keywords and entity signals are replaced atomically on reruns without overwriting topic, summary, or risk fields from later analysis stages.
+- Files changed: `db/migrations/0010_article_analysis_relevance_signal_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/article-relevance-scoring-job.cjs`, `src/db/schema/analysis-alert.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/article-relevance-scoring-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep rerunnable evidence for one analysis stage in its own side table and let the shared `article_analysis` row hold only the stage timestamps/scores that must compose with later enrichments.
+  - Gotchas encountered: stage reruns must update only their own columns on `article_analysis`; replacing the full row would wipe topic labels, summaries, or risk data produced by subsequent jobs.
+  - Useful context: `runArticleRelevanceScoringJob` reuses `getMonitoringTargetCollectorInput`, so active seed/expanded/excluded keyword filtering stays centralized; there are still no nearby `AGENTS.md` files to update, this story had no UI surface, and `npm run check` passed with 61 passing tests.
 ---

@@ -1,6 +1,12 @@
 'use strict';
 
 const articleAnalysisRiskBands = ['low', 'medium', 'high'];
+const keywordArticleAnalysisRelevanceSignalType = 'keyword';
+const entityArticleAnalysisRelevanceSignalType = 'entity';
+const articleAnalysisRelevanceSignalTypes = [
+  keywordArticleAnalysisRelevanceSignalType,
+  entityArticleAnalysisRelevanceSignalType,
+];
 const alertChannels = ['slack', 'email', 'sms'];
 const alertEventStatuses = [
   'pending',
@@ -18,5 +24,8 @@ module.exports = {
   alertDeliveryStatuses,
   alertEventStatuses,
   alertPolicyDefaultThreshold,
+  articleAnalysisRelevanceSignalTypes,
   articleAnalysisRiskBands,
+  entityArticleAnalysisRelevanceSignalType,
+  keywordArticleAnalysisRelevanceSignalType,
 };

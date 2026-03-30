@@ -78,6 +78,7 @@ function verifyWorkspaceSchema() {
     'article',
     'article_content',
     'article_analysis',
+    'article_analysis_relevance_signal',
     'article_candidate',
     'article_candidate_portal_metadata',
     'alert_delivery',
@@ -109,6 +110,12 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'article_analysis', ['workspace_id', 'monitoring_target_id', 'article_id'], true);
   requireIndex(db, 'article_analysis', ['workspace_id', 'risk_band', 'risk_score'], false);
   requireIndex(db, 'article_analysis', ['workspace_id', 'monitoring_target_id', 'updated_at'], false);
+  requireIndex(
+    db,
+    'article_analysis_relevance_signal',
+    ['workspace_id', 'article_analysis_id', 'signal_type', 'signal_value'],
+    true,
+  );
   requireIndex(db, 'article_candidate', ['workspace_id', 'id'], true);
   requireIndex(db, 'article_candidate', ['monitoring_target_id', 'portal_url'], true);
   requireIndex(db, 'article_candidate', ['workspace_id', 'ingestion_status'], false);
@@ -157,6 +164,18 @@ function verifyWorkspaceSchema() {
     { from: 'workspace_id', to: 'workspace_id' },
     { from: 'monitoring_target_id', to: 'id' },
   ]);
+  requireCompositeForeignKey(db, 'article_analysis_relevance_signal', 'workspace', [
+    { from: 'workspace_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(
+    db,
+    'article_analysis_relevance_signal',
+    'article_analysis',
+    [
+      { from: 'workspace_id', to: 'workspace_id' },
+      { from: 'article_analysis_id', to: 'id' },
+    ],
+  );
   requireCompositeForeignKey(db, 'article_candidate', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
   requireCompositeForeignKey(db, 'article_candidate', 'article', [
     { from: 'workspace_id', to: 'workspace_id' },

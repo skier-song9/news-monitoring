@@ -10,7 +10,10 @@ const {
   alertDeliveryStatuses,
   alertEventStatuses,
   alertPolicyDefaultThreshold,
+  articleAnalysisRelevanceSignalTypes,
   articleAnalysisRiskBands,
+  entityArticleAnalysisRelevanceSignalType,
+  keywordArticleAnalysisRelevanceSignalType,
 } = require('../src/db/schema/analysis-alert.cjs');
 
 function createDatabase() {
@@ -472,8 +475,126 @@ test('analysis and alert schema enforce score, scope, and delivery constraints',
   db.close();
 });
 
+test('analysis relevance signals stay tenant-scoped and enforce signal constraints', () => {
+  const db = createDatabase();
+  seedWorkspaceTargetArticle(db, 'workspace-1', 'target-1', 'article-1');
+  seedWorkspaceTargetArticle(db, 'workspace-2', 'target-2', 'article-2');
+
+  db.exec(`
+    INSERT INTO article_analysis (id, workspace_id, monitoring_target_id, article_id)
+    VALUES ('analysis-1', 'workspace-1', 'target-1', 'article-1');
+
+    INSERT INTO article_analysis_relevance_signal (
+      workspace_id,
+      article_analysis_id,
+      signal_type,
+      signal_value
+    )
+    VALUES (
+      'workspace-1',
+      'analysis-1',
+      'keyword',
+      'Acme Holdings'
+    );
+  `);
+
+  const savedSignal = db
+    .prepare(`
+      SELECT workspace_id, article_analysis_id, signal_type, signal_value
+      FROM article_analysis_relevance_signal
+      WHERE workspace_id = ? AND article_analysis_id = ?
+    `)
+    .get('workspace-1', 'analysis-1');
+
+  assert.deepEqual({ ...savedSignal }, {
+    workspace_id: 'workspace-1',
+    article_analysis_id: 'analysis-1',
+    signal_type: keywordArticleAnalysisRelevanceSignalType,
+    signal_value: 'Acme Holdings',
+  });
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_relevance_signal (
+          workspace_id,
+          article_analysis_id,
+          signal_type,
+          signal_value
+        )
+        VALUES (
+          'workspace-2',
+          'analysis-1',
+          'entity',
+          'Acme executive'
+        );
+      `),
+    /FOREIGN KEY constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_relevance_signal (
+          workspace_id,
+          article_analysis_id,
+          signal_type,
+          signal_value
+        )
+        VALUES (
+          'workspace-1',
+          'analysis-1',
+          'keyword',
+          'Acme Holdings'
+        );
+      `),
+    /UNIQUE constraint failed: article_analysis_relevance_signal\.workspace_id, article_analysis_relevance_signal\.article_analysis_id, article_analysis_relevance_signal\.signal_type, article_analysis_relevance_signal\.signal_value/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_relevance_signal (
+          workspace_id,
+          article_analysis_id,
+          signal_type,
+          signal_value
+        )
+        VALUES (
+          'workspace-1',
+          'analysis-1',
+          'topic',
+          'governance'
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_relevance_signal (
+          workspace_id,
+          article_analysis_id,
+          signal_type,
+          signal_value
+        )
+        VALUES (
+          'workspace-1',
+          'analysis-1',
+          'entity',
+          '   '
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  db.close();
+});
+
 test('analysis and alert constants match the migration contract', () => {
   assert.deepEqual(articleAnalysisRiskBands, ['low', 'medium', 'high']);
+  assert.deepEqual(articleAnalysisRelevanceSignalTypes, ['keyword', 'entity']);
   assert.deepEqual(alertChannels, ['slack', 'email', 'sms']);
   assert.deepEqual(alertEventStatuses, [
     'pending',
@@ -485,4 +606,6 @@ test('analysis and alert constants match the migration contract', () => {
   ]);
   assert.deepEqual(alertDeliveryStatuses, ['pending', 'sent', 'failed', 'skipped']);
   assert.equal(alertPolicyDefaultThreshold, 70);
+  assert.equal(keywordArticleAnalysisRelevanceSignalType, 'keyword');
+  assert.equal(entityArticleAnalysisRelevanceSignalType, 'entity');
 });
