@@ -1,0 +1,46 @@
+# Ralph Progress Log
+Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
+## Codebase Patterns
+- Put schema changes in `db/migrations` and verify them with dependency-free `node:sqlite` checks under `scripts/` and `tests/`.
+- Make migrations rerunnable with `IF NOT EXISTS`; `scripts/verify-workspace-schema.cjs` applies the same migration twice to catch duplicate-DDL failures.
+- Apply schema setup through `src/db/migrations.cjs` so tests and verifiers always run the full ordered migration set instead of hard-coding a single SQL file.
+- `scripts/lint.cjs` recursively syntax-checks `.cjs` files under `scripts`, `src`, and `tests`, so new modules are automatically covered by `npm run check`.
+- Model SQLite booleans as constrained integers like `is_active INTEGER CHECK (is_active IN (0, 1))`, and export the shared defaults from the matching `src/db/schema/*.cjs` module so tests verify the migration contract directly.
+- For tenant-scoped child tables, add a unique parent index on `(workspace_id, id)` before introducing composite foreign keys that must block cross-workspace references.
+- Use partial unique indexes for nullable dedupe keys such as `source_url`, `canonical_url`, and hashes so SQLite enforces idempotency without treating multiple `NULL` values as conflicts.
+---
+## 2026-03-30 20:04:26 KST - US-001
+- Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
+- Files changed: `package.json`, `db/migrations/0001_workspace_membership_schema.sql`, `scripts/lint.cjs`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/workspace.cjs`, `tests/workspace-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: schema constants now live in `src/db/schema/workspace.cjs`, while migration integrity checks live in `scripts/verify-workspace-schema.cjs` and `tests/workspace-schema.test.cjs`.
+  - Gotchas encountered: SQLite composite foreign keys require a matching unique index with the same column order, so `workspace_membership` needs `(workspace_id, id)` indexed for tenant-scoped references.
+  - Useful context: `npm run check` is the project quality gate and currently runs syntax checks, executable migration verification, and the `node:test` suite.
+---
+## 2026-03-30 20:10:36 KST - US-002
+- Implemented the `monitoring_target` schema with workspace ownership, target type and lifecycle status checks, optional notes, and a default risk threshold field.
+- Added shared ordered migration loading so verification and tests run every SQL migration instead of a single hard-coded file.
+- Files changed: `db/migrations/0002_monitoring_target_schema.sql`, `scripts/lint.cjs`, `scripts/verify-workspace-schema.cjs`, `src/db/migrations.cjs`, `src/db/schema/monitoring-target.cjs`, `tests/monitoring-target-schema.test.cjs`, `tests/workspace-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: add new schema contracts in module-specific files like `src/db/schema/monitoring-target.cjs`, then reuse them from tests to keep migration literals and runtime constants aligned.
+  - Gotchas encountered: once multiple migrations exist, every schema verifier and test must apply the ordered migration set or they will silently miss later tables.
+  - Useful context: this story was schema-only, so browser verification was not applicable; `npm run check` remains the release gate for migration work.
+---
+## 2026-03-30 20:15:52 KST - US-003
+- Implemented the `target_keyword` schema with source type checks for seed, expanded, and excluded terms, plus active-state and display-order fields for each monitoring target.
+- Extended the schema verifier and added dedicated tests covering defaults, foreign-key ownership, and keyword constraint enforcement.
+- Files changed: `db/migrations/0003_target_keyword_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/target-keyword.cjs`, `tests/target-keyword-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep enum-like source type lists and default values in a module such as `src/db/schema/target-keyword.cjs`, then assert those exact exports in schema tests.
+  - Gotchas encountered: SQLite does not have a native boolean type, so active flags need integer storage plus explicit `CHECK` constraints if you want predictable validation.
+  - Useful context: this was schema-only work, so browser verification was not applicable; `npm run check` passed after the migration, verifier, and test additions.
+---
+## 2026-03-30 20:32:53 KST - US-004
+- Implemented the `article` and `article_candidate` schema, including tenant-scoped workspace ownership, ingestion-status fields, and dedupe indexes for portal hits plus canonical article identifiers.
+- Added shared ingestion-status constants, extended the schema verifier for the new tables, and covered defaults, foreign-key isolation, dedupe behavior, and status validation with new tests.
+- Files changed: `db/migrations/0004_article_ingestion_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/article-ingestion.cjs`, `tests/article-ingestion-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: when a child table must stay workspace-isolated even through an intermediate relation, add `(workspace_id, id)` unique indexes on the parent table and use composite foreign keys from the child.
+  - Gotchas encountered: SQLite partial unique indexes are the cleanest way to dedupe nullable URLs and hashes; plain unique constraints would still allow repeated `NULL` rows but are less explicit for future readers.
+  - Useful context: this was schema-only work, so browser verification was not applicable; `npm run check` passed after the migration, verifier, and test additions.
+---

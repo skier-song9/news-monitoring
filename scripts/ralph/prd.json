@@ -1,0 +1,458 @@
+{
+  "project": "Reputation Risk News Monitoring Platform",
+  "branchName": "ralph/reputation-risk-news-monitoring",
+  "description": "Multi-tenant SaaS for monitoring company or public figure news, scoring article reputation risk, and alerting teams via Slack, email, and SMS.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add workspace and membership schema",
+      "description": "As a platform operator, I need workspace, membership, and invitation records so that customer data is isolated by tenant.",
+      "acceptanceCriteria": [
+        "Add workspace, membership, and invitation tables with tenant-scoped foreign keys",
+        "Workspace-scoped uniqueness is enforced for invitation email and membership pairings",
+        "Add indexes needed for workspace-scoped queries",
+        "Migration applies successfully",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add monitoring target schema",
+      "description": "As a developer, I need monitoring target records so that companies and people can be tracked independently inside each workspace.",
+      "acceptanceCriteria": [
+        "Add monitoring target table with type, display name, note, status, and default threshold fields",
+        "Support target status values needed for the review lifecycle before activation",
+        "Each target belongs to exactly one workspace",
+        "Migration applies successfully",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Add keyword schema for seed, expanded, and excluded terms",
+      "description": "As a developer, I need structured keyword records so that search terms can be generated automatically but still reviewed by users.",
+      "acceptanceCriteria": [
+        "Add target keyword table with source type values for seed, expanded, and excluded keywords",
+        "Store keyword active state and display order for each monitoring target",
+        "Each keyword belongs to exactly one monitoring target",
+        "Migration applies successfully",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Add article ingestion schema",
+      "description": "As a developer, I need article candidate and canonical article records so that search hits and source articles can be stored idempotently.",
+      "acceptanceCriteria": [
+        "Add article candidate and article tables for portal search hits and canonical article records",
+        "Store portal URL, source URL, canonical URL, normalized title hash, body hash, and ingestion status fields",
+        "Add uniqueness constraints or indexes that support idempotent article upserts",
+        "Migration applies successfully",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Add analysis and alert schema",
+      "description": "As a developer, I need analysis and alert records so that article scoring and delivery state are persisted and auditable.",
+      "acceptanceCriteria": [
+        "Add article analysis, alert policy, alert event, and alert delivery tables",
+        "Analysis schema stores relevance score, topic labels, summary, risk score, risk band, rationale, model version, and timestamps",
+        "Alert delivery schema stores channel, final status, and failure reason",
+        "Migration applies successfully",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Add workspace creation and invitation backend",
+      "description": "As a workspace admin, I want to create a workspace and invite teammates so that multiple operators can manage the same monitoring scope.",
+      "acceptanceCriteria": [
+        "Add backend actions or endpoints to create a workspace and invite a teammate by email",
+        "Only workspace admins can create invitations",
+        "Accepting an invitation creates a membership in the correct workspace",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Add monitoring target creation backend",
+      "description": "As a user, I want to create and edit monitoring targets so that the system knows which company or person to watch.",
+      "acceptanceCriteria": [
+        "Add backend action or endpoint to create a target with type, display name, note, threshold, and seed keywords",
+        "Reject target creation when no seed keyword is provided",
+        "New targets are saved with review-required status",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Add target discovery and expansion job",
+      "description": "As a user, I want the system to build an initial target profile so that I can verify the subject before collection begins.",
+      "acceptanceCriteria": [
+        "Add a background job that runs web search for a target's seed keywords",
+        "Call the LLM to generate a target summary, related entities, aliases, and expanded keyword candidates",
+        "Persist generated profile data without activating the target",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Add target review and activation backend",
+      "description": "As a user, I want to record whether the generated target profile matches my intended subject so that unrelated collection stays blocked.",
+      "acceptanceCriteria": [
+        "Add backend action or endpoint to save review decisions: match, partial_match, and mismatch",
+        "Targets remain non-collecting until an explicit activation decision is recorded",
+        "Mismatch decisions can reopen the target for keyword editing",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Add keyword management backend",
+      "description": "As a user, I want to edit expanded and excluded keywords so that search coverage is broad but controllable.",
+      "acceptanceCriteria": [
+        "Add backend actions or endpoints to add, remove, disable, and reorder target keywords",
+        "Preserve keyword source type for seed, expanded, and excluded entries",
+        "Only active keywords are returned in the collector input set",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Implement portal search collector",
+      "description": "As an operator, I want active targets searched in Naver, Nate, and Google News so that new coverage is discovered automatically.",
+      "acceptanceCriteria": [
+        "Add a scheduled collector that queries Naver, Nate, and Google News for active targets",
+        "Collector input includes active seed and expanded keywords plus excluded keywords",
+        "Each search hit is stored as an article candidate with portal metadata and crawl status",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Implement original article fetch and canonical dedupe",
+      "description": "As a system, I want original article pages fetched and merged idempotently so that analysis runs on canonical article content.",
+      "acceptanceCriteria": [
+        "Fetch the original article when a candidate contains a source article URL",
+        "Extract body text plus available author, publisher, publish time, and view count fields",
+        "Upsert canonical articles using source URL, canonical URL, normalized title hash, and body hash",
+        "Failed fetches record a retryable failure status and reason",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Implement target relevance scoring",
+      "description": "As a user, I want the system to score whether an article is actually about my target so that false positives are easier to suppress.",
+      "acceptanceCriteria": [
+        "Add an analysis step that computes a target relevance score for each canonical article",
+        "Store the matched keywords or entity signals used for the relevance decision",
+        "Only articles with completed ingestion are eligible for this step",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Implement topic classification",
+      "description": "As a user, I want articles categorized by topic so that I can review reputation risk by theme.",
+      "acceptanceCriteria": [
+        "Add an analysis step that assigns one or more topic labels to each article",
+        "Persist topic labels on the article analysis record",
+        "Topic classification can be rerun without creating duplicate analysis rows",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Implement article summary generation",
+      "description": "As a user, I want short summaries of collected articles so that I can triage faster.",
+      "acceptanceCriteria": [
+        "Add an analysis step that generates a summary of at most three sentences for each article",
+        "Summary generation records model version and completion timestamp",
+        "Existing summaries are replaced when a reanalysis request is issued",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Implement risk scoring and rationale",
+      "description": "As a user, I want a 0-100 risk score with rationale so that I can prioritize high-risk coverage.",
+      "acceptanceCriteria": [
+        "Add an analysis step that stores risk score, risk band, and human-readable rationale for each article",
+        "Risk bands map consistently from the stored numeric score",
+        "Risk scoring records model version and completion timestamp",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Add alert settings backend",
+      "description": "As a workspace admin, I want to configure thresholds and delivery channels so that alerts match our operating process.",
+      "acceptanceCriteria": [
+        "Add backend actions or endpoints to save workspace-level and target-level alert thresholds",
+        "Add validation for Slack webhook, email recipient, and SMS recipient settings before saving",
+        "Effective alert policy resolution prefers target overrides over workspace defaults",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Implement immediate high-risk alert dispatch",
+      "description": "As a user, I want high-risk articles delivered immediately so that I can react before the story spreads.",
+      "acceptanceCriteria": [
+        "Create an alert event when an article's risk score meets or exceeds the effective threshold",
+        "Dispatch immediate alerts to enabled Slack, email, and SMS channels",
+        "Each delivery stores channel, payload reference, sent_at, and final status",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Implement one-minute alert batching",
+      "description": "As a user, I want multiple high-risk articles found within one minute grouped together so that alert noise is reduced.",
+      "acceptanceCriteria": [
+        "Add a one-minute batching job that groups new high-risk alert events by workspace and target",
+        "Batch alerts include the highest-risk article plus aggregate counts",
+        "Immediate alert records are not duplicated when a batch alert is generated",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Add article feed query API",
+      "description": "As a user, I want filtered article queries so that the dashboard can show the exact monitoring slice I need.",
+      "acceptanceCriteria": [
+        "Add a query endpoint or server action that returns articles with target, risk band, topic, date range, publisher, and sort filters",
+        "Default sort returns highest-risk articles first",
+        "Results include title, target name, risk score, topic labels, publisher, author, and publish time",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "Add article detail query API",
+      "description": "As a user, I want a single article detail query so that the UI can show summary, rationale, and source links.",
+      "acceptanceCriteria": [
+        "Add a query endpoint or server action that returns one article with summary, rationale, matched keywords, and source URLs",
+        "Detail response includes ingestion and analysis timestamps",
+        "Requests for articles outside the caller's workspace are rejected",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "Add analytics aggregation API",
+      "description": "As a user, I want aggregate metrics by topic, publisher, and reporter so that recurring risk patterns are visible.",
+      "acceptanceCriteria": [
+        "Add aggregation queries for high-risk article counts by topic, publisher, and reporter over a selected date range",
+        "Aggregation queries support optional filtering by monitoring target",
+        "Each aggregation row can be linked back to the matching article IDs for drilldown",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "Add workspace members UI",
+      "description": "As a workspace admin, I want a members page so that I can invite teammates and see who has access.",
+      "acceptanceCriteria": [
+        "Add a members management screen that lists current members and pending invitations",
+        "Admins can submit an invite by entering an email address",
+        "Non-admin users do not see invite controls",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "Add monitoring target registration UI",
+      "description": "As a user, I want a target creation form so that I can start a new monitoring workflow without manual database edits.",
+      "acceptanceCriteria": [
+        "Add a target creation form with entity type, display name, note, threshold, and seed keywords",
+        "Form prevents submission when no seed keyword is entered",
+        "Successful submission lands on the review workflow for the new target",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Add target review UI",
+      "description": "As a user, I want to review the generated target profile so that I can confirm the subject before activation.",
+      "acceptanceCriteria": [
+        "Add a review screen that shows generated summary, related entities, aliases, and keyword candidates",
+        "User can mark the target as match, partial_match, or mismatch",
+        "Activation is unavailable until a review decision is saved",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-026",
+      "title": "Add keyword editor UI",
+      "description": "As a user, I want to edit expanded and excluded keywords so that the collector uses the right search terms.",
+      "acceptanceCriteria": [
+        "Add keyword management UI with separate sections for seed, expanded, and excluded keywords",
+        "Users can add, disable, and remove keywords from the review and edit flow",
+        "Saved keyword changes are reflected when the target is activated",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-027",
+      "title": "Add alert settings UI",
+      "description": "As a workspace admin, I want an alert settings page so that I can manage thresholds and channels without editing configuration manually.",
+      "acceptanceCriteria": [
+        "Add an alert settings screen for workspace defaults and target-specific overrides",
+        "Screen exposes Slack, email, and SMS channel forms with inline validation errors",
+        "Saved settings reflect the effective threshold and enabled channels",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Add live article dashboard UI",
+      "description": "As a user, I want a live article dashboard so that I can triage high-risk coverage quickly.",
+      "acceptanceCriteria": [
+        "Add a dashboard view that shows title, target, risk score, topic labels, publisher, author, and publish time",
+        "Dashboard includes filters for target, risk band, topic, date range, and publisher plus highest-risk and newest sort options",
+        "New articles can appear on the screen without a full page reload",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-029",
+      "title": "Add article detail UI",
+      "description": "As a user, I want article details alongside the feed so that I can inspect why a story was flagged.",
+      "acceptanceCriteria": [
+        "Add an article detail panel or page that shows summary, risk rationale, matched keywords, and source links",
+        "Detail view is reachable from the dashboard article list",
+        "Detail view shows the latest stored analysis timestamps",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-030",
+      "title": "Add analytics dashboard UI",
+      "description": "As a user, I want analytics views for topic, publisher, and reporter trends so that I can identify repeat risk sources.",
+      "acceptanceCriteria": [
+        "Add an analytics screen with topic, publisher, and reporter high-risk summaries for a selected date range",
+        "Analytics view supports optional target filtering",
+        "Clicking an aggregate row opens the matching article list drilldown",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
