@@ -24,6 +24,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For auditable alert dispatch jobs, insert the parent `alert_event` first, call external channel adapters outside the transaction, then persist per-channel `alert_delivery` records plus 1:1 dispatch metadata and the final event status in a second transaction.
 - For aggregate notification jobs derived from existing `alert_event` rows, keep batching state in additive side tables keyed back to source event IDs, and enforce a unique `(workspace_id, alert_event_id)` membership so reruns cannot rebatch the same immediate alert.
 - For article read APIs, treat `article_analysis` as the feed grain, use `article_analysis_topic_label` for topic filtering, and deserialize the ordered `article_analysis.topic_labels` JSON snapshot for the response payload.
+- Use `article_analysis.id` as the stable key for article detail and drilldown queries, because one canonical `article` can legitimately appear under multiple monitoring targets in the same workspace.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -203,4 +204,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: article dashboard queries should read from `article_analysis` so each row stays target-specific, while topic filters should hit the normalized `article_analysis_topic_label` table and the response should use parsed `topic_labels` JSON to preserve label order.
   - Gotchas encountered: publisher filtering is more reliable as a trimmed case-insensitive comparison because stored publisher names are not normalized to a single case in the ingestion layer.
   - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 87 passing tests.
+---
+## 2026-03-31 00:21:41 KST - US-021
+- Implemented `getArticleDetail` as a backend query service keyed by `articleAnalysisId`, returning summary, rationale, matched keyword and entity signals, plus canonical/source/portal links for a single target-specific article analysis.
+- Added direct query-service tests covering detail response mapping, empty related-record fallbacks, workspace access rejection, and not-found behavior for out-of-scope analysis IDs.
+- Files changed: `src/backend/article-detail-query-service.cjs`, `tests/article-detail-query-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: article detail lookups should key off `article_analysis.id` and pull evidence from `article_analysis_relevance_signal`, since the same canonical `article` may need separate detail views per monitoring target.
+  - Gotchas encountered: the only ingestion timestamp currently stored for detail queries is `article_content.fetched_at`, so detail responses need to surface that with `published_at` instead of assuming an `article.ingested_at` column exists.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 90 passing tests.
 ---
