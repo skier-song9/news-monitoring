@@ -3,6 +3,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 ## Codebase Patterns
 - Put schema changes in `db/migrations` and verify them with dependency-free `node:sqlite` checks under `scripts/` and `tests/`.
 - Make migrations rerunnable with `IF NOT EXISTS`; `scripts/verify-workspace-schema.cjs` applies the same migration twice to catch duplicate-DDL failures.
+- When SQLite needs rerunnable schema expansion beyond `CREATE TABLE` or `CREATE INDEX`, prefer additive side tables over `ALTER TABLE ... ADD COLUMN` because the bundled engine here does not support `ADD COLUMN IF NOT EXISTS`.
 - Apply schema setup through `src/db/migrations.cjs` so tests and verifiers always run the full ordered migration set instead of hard-coding a single SQL file.
 - `scripts/lint.cjs` recursively syntax-checks `.cjs` files under `scripts`, `src`, and `tests`, so new modules are automatically covered by `npm run check`.
 - Model SQLite booleans as constrained integers like `is_active INTEGER CHECK (is_active IN (0, 1))`, and export the shared defaults from the matching `src/db/schema/*.cjs` module so tests verify the migration contract directly.
@@ -103,4 +104,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keep keyword ordering scoped to one `source_type`, and require reorder requests to submit the complete ID set for that source before rewriting sequential `display_order` values.
   - Gotchas encountered: collector-facing keyword queries should filter `is_active = 1` in SQL so disabled rows stay stored without leaking into collection jobs.
   - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 47 passing tests.
+---
+## 2026-03-30 22:52:37 KST - US-011
+- Implemented a scheduled portal search collector job that loads active targets, passes active seed, expanded, and excluded keywords into injected Naver, Nate, and Google News adapters, and upserts article candidates idempotently.
+- Added a rerunnable article-candidate portal metadata table so each stored hit keeps portal title, snippet, and publish-time context alongside the candidate crawl status.
+- Files changed: `db/migrations/0008_article_candidate_portal_metadata.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/portal-search-collector.cjs`, `src/db/schema/article-ingestion.cjs`, `tests/article-ingestion-schema.test.cjs`, `tests/portal-search-collector.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep external portal adapters dependency-injected, then persist each portal batch in a short transaction so scheduled collectors stay deterministic under `node:test`.
+  - Gotchas encountered: candidate refresh logic should reset retryable `failed` hits back to `pending` while preserving already `linked` candidates, otherwise reruns either strand retries or break canonical article links.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 52 passing tests.
 ---
