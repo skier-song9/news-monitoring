@@ -21,6 +21,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - When an analysis stage emits an ordered label list, persist the ordered JSON snapshot on `article_analysis` and replace the normalized row-per-label side table in the same transaction so reruns stay query-friendly and idempotent.
 - Keep derived score-band mapping in shared schema helpers and reuse those exports in backend jobs so runtime classification stays aligned with SQLite `CHECK` constraints.
 - Resolve alert settings from `alert_policy` with target scope first, then workspace scope, and finally the monitoring target's default threshold with all channels disabled when no saved policy exists.
+- For auditable alert dispatch jobs, insert the parent `alert_event` first, call external channel adapters outside the transaction, then persist per-channel `alert_delivery` records plus 1:1 dispatch metadata and the final event status in a second transaction.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -173,4 +174,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: alert recipient lists are stored as normalized JSON arrays in the existing `TEXT` columns so backend services can round-trip structured email and SMS destinations without adding join tables.
   - Gotchas encountered: because `alert_policy` override rows are whole-policy records, target-specific saves need to start from the current effective policy to avoid unintentionally dropping threshold or channel settings that were inherited before the override was created.
   - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 76 passing tests.
+---
+## 2026-03-30 23:52:52 KST - US-018
+- Implemented `runImmediateAlertDispatchJob` to create one immediate `alert_event` per newly scored article analysis that meets the effective threshold, build the alert payload, and dispatch enabled Slack, email, and SMS deliveries without duplicating reruns.
+- Added `alert_delivery_dispatch` as a rerunnable 1:1 metadata table so each channel delivery can persist payload references and `sent_at` audit data alongside the existing `alert_delivery` status row.
+- Files changed: `db/migrations/0012_alert_delivery_dispatch_schema.sql`, `src/backend/immediate-alert-dispatch-job.cjs`, `scripts/verify-workspace-schema.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/immediate-alert-dispatch-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: immediate alert jobs in this codebase should create the parent `alert_event` before dispatch, then persist channel results and final status in a follow-up transaction so partial failures stay auditable.
+  - Gotchas encountered: `alert_delivery` is unique per `(workspace_id, alert_event_id, channel)`, so provider payload references need a side table instead of widening the base table through a non-rerunnable `ALTER TABLE`.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 80 passing tests.
 ---

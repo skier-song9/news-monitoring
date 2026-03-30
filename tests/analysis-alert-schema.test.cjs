@@ -71,6 +71,9 @@ test('analysis and alert records use the shared defaults', () => {
 
     INSERT INTO alert_delivery (id, workspace_id, alert_event_id, alert_policy_id, channel)
     VALUES ('delivery-1', 'workspace-1', 'event-1', 'policy-1', 'slack');
+
+    INSERT INTO alert_delivery_dispatch (workspace_id, alert_delivery_id)
+    VALUES ('workspace-1', 'delivery-1');
   `);
 
   const analysis = db
@@ -97,6 +100,9 @@ test('analysis and alert records use the shared defaults', () => {
   const delivery = db
     .prepare('SELECT final_status FROM alert_delivery WHERE id = ?')
     .get('delivery-1');
+  const deliveryDispatch = db
+    .prepare('SELECT payload_reference, sent_at FROM alert_delivery_dispatch WHERE workspace_id = ? AND alert_delivery_id = ?')
+    .get('workspace-1', 'delivery-1');
 
   assert.equal(analysis.relevance_score, null);
   assert.equal(analysis.topic_labels, '[]');
@@ -114,6 +120,8 @@ test('analysis and alert records use the shared defaults', () => {
   assert.equal(event.status, alertEventStatuses[0]);
   assert.ok(event.triggered_at);
   assert.equal(delivery.final_status, alertDeliveryStatuses[0]);
+  assert.equal(deliveryDispatch.payload_reference, null);
+  assert.equal(deliveryDispatch.sent_at, null);
 
   db.close();
 });
@@ -274,6 +282,19 @@ test('analysis and alert schema enforce score, scope, and delivery constraints',
       'ops@example.com',
       'sent'
     );
+
+    INSERT INTO alert_delivery_dispatch (
+      workspace_id,
+      alert_delivery_id,
+      payload_reference,
+      sent_at
+    )
+    VALUES (
+      'workspace-1',
+      'delivery-1',
+      'email-message-1',
+      '2026-03-30T12:10:00Z'
+    );
   `);
 
   assert.throws(
@@ -404,6 +425,23 @@ test('analysis and alert schema enforce score, scope, and delivery constraints',
   assert.throws(
     () =>
       db.exec(`
+        INSERT INTO alert_delivery_dispatch (
+          workspace_id,
+          alert_delivery_id,
+          payload_reference
+        )
+        VALUES (
+          'workspace-1',
+          'delivery-1',
+          '   '
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
         INSERT INTO alert_delivery (
           id,
           workspace_id,
@@ -467,6 +505,23 @@ test('analysis and alert schema enforce score, scope, and delivery constraints',
           'sms',
           'failed',
           'Provider rejected request.'
+        );
+      `),
+    /FOREIGN KEY constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO alert_delivery_dispatch (
+          workspace_id,
+          alert_delivery_id,
+          payload_reference
+        )
+        VALUES (
+          'workspace-2',
+          'delivery-1',
+          'cross-workspace'
         );
       `),
     /FOREIGN KEY constraint failed/u,
