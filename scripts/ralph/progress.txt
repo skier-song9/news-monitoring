@@ -17,6 +17,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For ordered keyword collections, treat `display_order` as scoped to a single `source_type`, and make reorder flows rewrite the full ID set for that source in one transaction.
 - When a target discovery rerun regenerates profile data, clear any saved review state in the same transaction so stale mismatch or approval decisions do not leak into the next review cycle.
 - For rerunnable analysis stages, keep one stable `article_analysis` row per `(workspace_id, monitoring_target_id, article_id)` and store fan-out evidence in a stage-specific side table so later enrichments can update their own fields without clobbering other analysis outputs.
+- When an analysis stage emits an ordered label list, persist the ordered JSON snapshot on `article_analysis` and replace the normalized row-per-label side table in the same transaction so reruns stay query-friendly and idempotent.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -133,4 +134,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keep rerunnable evidence for one analysis stage in its own side table and let the shared `article_analysis` row hold only the stage timestamps/scores that must compose with later enrichments.
   - Gotchas encountered: stage reruns must update only their own columns on `article_analysis`; replacing the full row would wipe topic labels, summaries, or risk data produced by subsequent jobs.
   - Useful context: `runArticleRelevanceScoringJob` reuses `getMonitoringTargetCollectorInput`, so active seed/expanded/excluded keyword filtering stays centralized; there are still no nearby `AGENTS.md` files to update, this story had no UI surface, and `npm run check` passed with 61 passing tests.
+---
+## 2026-03-30 23:20:00 KST - US-014
+- Implemented `runArticleTopicClassificationJob` to classify each distinct target/article pair whose canonical article ingestion is complete, upserting ordered topic labels onto `article_analysis` without creating duplicate analysis rows on reruns.
+- Added `article_analysis_topic_label` as a rerunnable side table so topic labels are replaced atomically in normalized form alongside the JSON snapshot stored on the shared analysis row.
+- Files changed: `db/migrations/0011_article_analysis_topic_label_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/article-topic-classification-job.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/article-topic-classification-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: for ordered topic outputs, keep the API-facing JSON array on `article_analysis` and mirror the same values in a stage-specific side table so later jobs can query or replace them without parsing JSON.
+  - Gotchas encountered: topic-classification reruns need to delete prior `article_analysis_topic_label` rows inside the same transaction as the `article_analysis` update or stale labels will survive after a narrower recategorization.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 65 passing tests.
 ---

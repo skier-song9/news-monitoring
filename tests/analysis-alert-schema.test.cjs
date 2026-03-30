@@ -592,6 +592,95 @@ test('analysis relevance signals stay tenant-scoped and enforce signal constrain
   db.close();
 });
 
+test('analysis topic labels stay tenant-scoped and enforce label constraints', () => {
+  const db = createDatabase();
+  seedWorkspaceTargetArticle(db, 'workspace-1', 'target-1', 'article-1');
+  seedWorkspaceTargetArticle(db, 'workspace-2', 'target-2', 'article-2');
+
+  db.exec(`
+    INSERT INTO article_analysis (id, workspace_id, monitoring_target_id, article_id)
+    VALUES ('analysis-1', 'workspace-1', 'target-1', 'article-1');
+
+    INSERT INTO article_analysis_topic_label (
+      workspace_id,
+      article_analysis_id,
+      topic_label
+    )
+    VALUES (
+      'workspace-1',
+      'analysis-1',
+      'governance'
+    );
+  `);
+
+  const savedTopicLabel = db
+    .prepare(`
+      SELECT workspace_id, article_analysis_id, topic_label
+      FROM article_analysis_topic_label
+      WHERE workspace_id = ? AND article_analysis_id = ?
+    `)
+    .get('workspace-1', 'analysis-1');
+
+  assert.deepEqual({ ...savedTopicLabel }, {
+    workspace_id: 'workspace-1',
+    article_analysis_id: 'analysis-1',
+    topic_label: 'governance',
+  });
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_topic_label (
+          workspace_id,
+          article_analysis_id,
+          topic_label
+        )
+        VALUES (
+          'workspace-2',
+          'analysis-1',
+          'labor'
+        );
+      `),
+    /FOREIGN KEY constraint failed/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_topic_label (
+          workspace_id,
+          article_analysis_id,
+          topic_label
+        )
+        VALUES (
+          'workspace-1',
+          'analysis-1',
+          'governance'
+        );
+      `),
+    /UNIQUE constraint failed: article_analysis_topic_label\.workspace_id, article_analysis_topic_label\.article_analysis_id, article_analysis_topic_label\.topic_label/u,
+  );
+
+  assert.throws(
+    () =>
+      db.exec(`
+        INSERT INTO article_analysis_topic_label (
+          workspace_id,
+          article_analysis_id,
+          topic_label
+        )
+        VALUES (
+          'workspace-1',
+          'analysis-1',
+          '   '
+        );
+      `),
+    /CHECK constraint failed/u,
+  );
+
+  db.close();
+});
+
 test('analysis and alert constants match the migration contract', () => {
   assert.deepEqual(articleAnalysisRiskBands, ['low', 'medium', 'high']);
   assert.deepEqual(articleAnalysisRelevanceSignalTypes, ['keyword', 'entity']);

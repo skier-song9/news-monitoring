@@ -79,6 +79,7 @@ function verifyWorkspaceSchema() {
     'article_content',
     'article_analysis',
     'article_analysis_relevance_signal',
+    'article_analysis_topic_label',
     'article_candidate',
     'article_candidate_portal_metadata',
     'alert_delivery',
@@ -114,6 +115,12 @@ function verifyWorkspaceSchema() {
     db,
     'article_analysis_relevance_signal',
     ['workspace_id', 'article_analysis_id', 'signal_type', 'signal_value'],
+    true,
+  );
+  requireIndex(
+    db,
+    'article_analysis_topic_label',
+    ['workspace_id', 'article_analysis_id', 'topic_label'],
     true,
   );
   requireIndex(db, 'article_candidate', ['workspace_id', 'id'], true);
@@ -170,6 +177,18 @@ function verifyWorkspaceSchema() {
   requireCompositeForeignKey(
     db,
     'article_analysis_relevance_signal',
+    'article_analysis',
+    [
+      { from: 'workspace_id', to: 'workspace_id' },
+      { from: 'article_analysis_id', to: 'id' },
+    ],
+  );
+  requireCompositeForeignKey(db, 'article_analysis_topic_label', 'workspace', [
+    { from: 'workspace_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(
+    db,
+    'article_analysis_topic_label',
     'article_analysis',
     [
       { from: 'workspace_id', to: 'workspace_id' },
