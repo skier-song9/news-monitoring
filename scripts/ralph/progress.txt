@@ -9,6 +9,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For tenant-scoped child tables, add a unique parent index on `(workspace_id, id)` before introducing composite foreign keys that must block cross-workspace references.
 - Use partial unique indexes for nullable dedupe keys such as `source_url`, `canonical_url`, and hashes so SQLite enforces idempotency without treating multiple `NULL` values as conflicts.
 - Use partial unique indexes on nullable scope foreign keys to model one workspace default row plus one target override row, such as `alert_policy` records with `monitoring_target_id IS NULL` versus `IS NOT NULL`.
+- For backend write flows, wrap multi-table SQLite mutations in an explicit transaction helper and inject `now`/ID/token generators so `node:test` coverage stays deterministic without mocking the database.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -53,4 +54,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: `alert_policy` uses partial unique indexes to enforce one workspace default policy plus one target-specific override row even though `monitoring_target_id` is nullable.
   - Gotchas encountered: when a numeric score implies a categorical band, a database `CHECK` constraint is the safest place to enforce that mapping so later reanalysis jobs cannot persist mismatched snapshots.
   - Useful context: no `AGENTS.md` files exist in this repo, so reusable notes were captured in this progress log instead; this was schema-only work, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 20:48:37 KST - US-006
+- Implemented a transactional workspace backend service with actions to create a workspace, invite teammates by email, and accept invitations into the correct workspace membership.
+- Added focused backend tests covering workspace bootstrap, admin-only invitation creation, successful invitation acceptance, and email mismatch rejection for invitation tokens.
+- Files changed: `src/backend/workspace-service.cjs`, `src/db/schema/workspace.cjs`, `tests/workspace-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: backend actions fit this repo best as dependency-free CommonJS service modules tested directly against `node:sqlite` with the real migrations applied.
+  - Gotchas encountered: rows returned by `node:sqlite` use a null prototype, so tests should normalize query results before strict deep equality assertions.
+  - Useful context: there are still no `AGENTS.md` files in the edited directories, so the reusable notes for this backend slice were captured here instead; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
 ---
