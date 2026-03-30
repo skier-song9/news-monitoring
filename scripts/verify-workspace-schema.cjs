@@ -76,7 +76,11 @@ function verifyWorkspaceSchema() {
 
   for (const tableName of [
     'article',
+    'article_analysis',
     'article_candidate',
+    'alert_delivery',
+    'alert_event',
+    'alert_policy',
     'monitoring_target',
     'target_keyword',
     'user_account',
@@ -95,9 +99,23 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'article', ['workspace_id', 'body_hash'], true);
   requireIndex(db, 'article', ['workspace_id', 'ingestion_status'], false);
   requireIndex(db, 'article', ['workspace_id', 'normalized_title_hash', 'body_hash'], false);
+  requireIndex(db, 'article_analysis', ['workspace_id', 'id'], true);
+  requireIndex(db, 'article_analysis', ['workspace_id', 'monitoring_target_id', 'article_id'], true);
+  requireIndex(db, 'article_analysis', ['workspace_id', 'risk_band', 'risk_score'], false);
+  requireIndex(db, 'article_analysis', ['workspace_id', 'monitoring_target_id', 'updated_at'], false);
   requireIndex(db, 'article_candidate', ['monitoring_target_id', 'portal_url'], true);
   requireIndex(db, 'article_candidate', ['workspace_id', 'ingestion_status'], false);
   requireIndex(db, 'article_candidate', ['workspace_id', 'source_url'], false);
+  requireIndex(db, 'alert_delivery', ['workspace_id', 'id'], true);
+  requireIndex(db, 'alert_delivery', ['workspace_id', 'alert_event_id', 'channel'], true);
+  requireIndex(db, 'alert_delivery', ['workspace_id', 'final_status'], false);
+  requireIndex(db, 'alert_event', ['workspace_id', 'id'], true);
+  requireIndex(db, 'alert_event', ['workspace_id', 'article_analysis_id'], true);
+  requireIndex(db, 'alert_event', ['workspace_id', 'status', 'triggered_at'], false);
+  requireIndex(db, 'alert_event', ['workspace_id', 'monitoring_target_id', 'triggered_at'], false);
+  requireIndex(db, 'alert_policy', ['workspace_id', 'id'], true);
+  requireIndex(db, 'alert_policy', ['workspace_id'], true);
+  requireIndex(db, 'alert_policy', ['workspace_id', 'monitoring_target_id'], true);
   requireIndex(db, 'monitoring_target', ['workspace_id', 'status'], false);
   requireIndex(db, 'monitoring_target', ['workspace_id', 'id'], true);
   requireIndex(db, 'monitoring_target', ['workspace_id', 'type'], false);
@@ -109,12 +127,52 @@ function verifyWorkspaceSchema() {
   requireIndex(db, 'workspace_invitation', ['workspace_id', 'status'], false);
 
   requireCompositeForeignKey(db, 'article', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'article_analysis', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'article_analysis', 'article', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'article_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'article_analysis', 'monitoring_target', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'monitoring_target_id', to: 'id' },
+  ]);
   requireCompositeForeignKey(db, 'article_candidate', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
   requireCompositeForeignKey(db, 'article_candidate', 'article', [
     { from: 'workspace_id', to: 'workspace_id' },
     { from: 'article_id', to: 'id' },
   ]);
   requireCompositeForeignKey(db, 'article_candidate', 'monitoring_target', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'monitoring_target_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_delivery', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'alert_delivery', 'alert_event', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_event_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_delivery', 'alert_policy', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_policy_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_event', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'alert_event', 'monitoring_target', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'monitoring_target_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_event', 'article', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'article_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_event', 'article_analysis', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'article_analysis_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_event', 'alert_policy', [
+    { from: 'workspace_id', to: 'workspace_id' },
+    { from: 'alert_policy_id', to: 'id' },
+  ]);
+  requireCompositeForeignKey(db, 'alert_policy', 'workspace', [{ from: 'workspace_id', to: 'id' }]);
+  requireCompositeForeignKey(db, 'alert_policy', 'monitoring_target', [
     { from: 'workspace_id', to: 'workspace_id' },
     { from: 'monitoring_target_id', to: 'id' },
   ]);
