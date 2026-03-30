@@ -19,6 +19,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For rerunnable analysis stages, keep one stable `article_analysis` row per `(workspace_id, monitoring_target_id, article_id)` and store fan-out evidence in a stage-specific side table so later enrichments can update their own fields without clobbering other analysis outputs.
 - For analysis stages that should not rerun on every scheduler pass, left-join `article_analysis` in the eligibility query and accept explicit `{ workspaceId, monitoringTargetId, articleId }` reanalysis keys so completed stage output is only replaced on demand.
 - When an analysis stage emits an ordered label list, persist the ordered JSON snapshot on `article_analysis` and replace the normalized row-per-label side table in the same transaction so reruns stay query-friendly and idempotent.
+- Keep derived score-band mapping in shared schema helpers and reuse those exports in backend jobs so runtime classification stays aligned with SQLite `CHECK` constraints.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -153,4 +154,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: when an analysis stage should be incremental rather than unconditional, select eligible articles with a `LEFT JOIN` on `article_analysis` and gate reruns behind explicit reanalysis keys.
   - Gotchas encountered: the shared `article_analysis.model_version` field is overwritten by whichever analysis stage ran most recently, so stage-specific updates must avoid touching unrelated columns while still refreshing their own completion timestamp.
   - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 68 passing tests.
+---
+## 2026-03-30 23:34:20 KST - US-016
+- Implemented `runArticleRiskScoringJob` to score each completed target/article pair once, derive the stored risk band from the numeric score, persist rationale plus model version and completion timestamp, and allow explicit reanalysis for already-scored articles.
+- Added a shared risk-band helper in `src/db/schema/analysis-alert.cjs` so backend jobs reuse the same score-to-band mapping contract enforced by the migration.
+- Files changed: `src/backend/article-risk-scoring-job.cjs`, `src/db/schema/analysis-alert.cjs`, `tests/article-risk-scoring-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: use explicit reanalysis requests for expensive late-stage LLM analysis jobs so existing completed rows are skipped unless a caller asks to refresh them.
+  - Gotchas encountered: `article_analysis.model_version` is still a shared column, so risk-scoring updates must only touch risk fields plus the shared version/timestamp fields and leave relevance, topics, and summary data intact.
+  - Useful context: there are no `AGENTS.md` files anywhere in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 71 passing tests.
 ---
