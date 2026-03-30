@@ -20,6 +20,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For analysis stages that should not rerun on every scheduler pass, left-join `article_analysis` in the eligibility query and accept explicit `{ workspaceId, monitoringTargetId, articleId }` reanalysis keys so completed stage output is only replaced on demand.
 - When an analysis stage emits an ordered label list, persist the ordered JSON snapshot on `article_analysis` and replace the normalized row-per-label side table in the same transaction so reruns stay query-friendly and idempotent.
 - Keep derived score-band mapping in shared schema helpers and reuse those exports in backend jobs so runtime classification stays aligned with SQLite `CHECK` constraints.
+- Resolve alert settings from `alert_policy` with target scope first, then workspace scope, and finally the monitoring target's default threshold with all channels disabled when no saved policy exists.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -163,4 +164,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: use explicit reanalysis requests for expensive late-stage LLM analysis jobs so existing completed rows are skipped unless a caller asks to refresh them.
   - Gotchas encountered: `article_analysis.model_version` is still a shared column, so risk-scoring updates must only touch risk fields plus the shared version/timestamp fields and leave relevance, topics, and summary data intact.
   - Useful context: there are no `AGENTS.md` files anywhere in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 71 passing tests.
+---
+## 2026-03-30 23:43:40 KST - US-017
+- Implemented `alert-policy-service` backend actions to upsert workspace and target alert policies, validate Slack/email/SMS destinations, and normalize recipient storage for later dispatch jobs.
+- Added effective alert policy resolution that prefers target overrides over workspace defaults and otherwise falls back to the monitoring target threshold with all channels disabled.
+- Files changed: `src/backend/alert-policy-service.cjs`, `tests/alert-policy-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: alert recipient lists are stored as normalized JSON arrays in the existing `TEXT` columns so backend services can round-trip structured email and SMS destinations without adding join tables.
+  - Gotchas encountered: because `alert_policy` override rows are whole-policy records, target-specific saves need to start from the current effective policy to avoid unintentionally dropping threshold or channel settings that were inherited before the override was created.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 76 passing tests.
 ---
