@@ -4,6 +4,9 @@ const { randomUUID } = require('node:crypto');
 
 const { resolveEffectiveAlertPolicy } = require('./alert-policy-service.cjs');
 const { completedArticleIngestionStatus } = require('../db/schema/article-ingestion.cjs');
+const { activeMonitoringTargetStatus } = require('../db/schema/monitoring-target.cjs');
+
+const retryableAlertEventStatuses = ['pending', 'dispatching'];
 
 class ImmediateAlertDispatchJobError extends Error {
   constructor(code, message) {
@@ -117,7 +120,9 @@ function listEligibleImmediateAlerts(db) {
              ac.published_at,
              ac.view_count,
              ac.fetched_at,
-             e.id AS alert_event_id
+             e.id AS alert_event_id,
+             e.status AS alert_event_status,
+             e.triggered_at AS alert_event_triggered_at
       FROM article_analysis aa
       JOIN monitoring_target t
         ON t.workspace_id = aa.workspace_id
@@ -129,14 +134,23 @@ function listEligibleImmediateAlerts(db) {
         ON ac.workspace_id = aa.workspace_id
        AND ac.article_id = aa.article_id
       LEFT JOIN alert_event e
-        ON e.workspace_id = aa.workspace_id
+       ON e.workspace_id = aa.workspace_id
        AND e.article_analysis_id = aa.id
       WHERE a.ingestion_status = ?
         AND aa.risk_score IS NOT NULL
-        AND e.id IS NULL
+        AND t.status = ?
+        AND (
+          e.id IS NULL
+          OR e.status IN (?, ?)
+        )
       ORDER BY aa.workspace_id, aa.monitoring_target_id, aa.article_id
     `)
-    .all(completedArticleIngestionStatus);
+    .all(
+      completedArticleIngestionStatus,
+      activeMonitoringTargetStatus,
+      retryableAlertEventStatuses[0],
+      retryableAlertEventStatuses[1],
+    );
 }
 
 function normalizeMonitoringTargetRow(row) {
@@ -186,6 +200,18 @@ function normalizeArticleAnalysisRow(row) {
     topicsClassifiedAt: row.topics_classified_at,
     summaryGeneratedAt: row.summary_generated_at,
     riskScoredAt: row.risk_scored_at,
+  };
+}
+
+function normalizeExistingAlertEventRow(row) {
+  if (typeof row.alert_event_id !== 'string' || !row.alert_event_id.trim()) {
+    return null;
+  }
+
+  return {
+    id: row.alert_event_id,
+    status: row.alert_event_status,
+    triggeredAt: row.alert_event_triggered_at,
   };
 }
 
@@ -317,6 +343,37 @@ function createAlertEvent(db, event) {
     event.dispatchedAt,
     event.createdAt,
     event.updatedAt,
+  );
+}
+
+function deleteAlertDeliveriesByEventId(db, event) {
+  db.prepare(`
+    DELETE FROM alert_delivery
+    WHERE workspace_id = ? AND alert_event_id = ?
+  `).run(event.workspaceId, event.id);
+}
+
+function resetAlertEventForDispatch(db, event) {
+  db.prepare(`
+    UPDATE alert_event
+    SET alert_policy_id = ?,
+        threshold_value = ?,
+        risk_score = ?,
+        risk_band = ?,
+        status = ?,
+        dispatched_at = ?,
+        updated_at = ?
+    WHERE workspace_id = ? AND id = ?
+  `).run(
+    event.alertPolicyId,
+    event.thresholdValue,
+    event.riskScore,
+    event.riskBand,
+    event.status,
+    event.dispatchedAt,
+    event.updatedAt,
+    event.workspaceId,
+    event.id,
   );
 }
 
@@ -472,6 +529,7 @@ async function runImmediateAlertDispatchJob({
     const monitoringTarget = normalizeMonitoringTargetRow(row);
     const article = normalizeArticleRow(row);
     const articleAnalysis = normalizeArticleAnalysisRow(row);
+    const existingAlertEvent = normalizeExistingAlertEventRow(row);
     const effectivePolicy = resolveEffectiveAlertPolicy({
       db,
       workspaceId: monitoringTarget.workspaceId,
@@ -482,8 +540,8 @@ async function runImmediateAlertDispatchJob({
       continue;
     }
 
-    const triggeredAt = now();
-    const alertEventId = createId();
+    const triggeredAt = existingAlertEvent ? existingAlertEvent.triggeredAt : now();
+    const alertEventId = existingAlertEvent ? existingAlertEvent.id : createId();
     const alertPayload = buildAlertPayload({
       monitoringTarget,
       article,
@@ -491,8 +549,28 @@ async function runImmediateAlertDispatchJob({
       thresholdValue: effectivePolicy.riskThreshold,
     });
     const enabledChannels = buildEnabledChannels(effectivePolicy);
+    const initialStatus = enabledChannels.length > 0 ? 'dispatching' : 'suppressed';
 
     runInTransaction(db, () => {
+      if (existingAlertEvent) {
+        deleteAlertDeliveriesByEventId(db, {
+          id: alertEventId,
+          workspaceId: monitoringTarget.workspaceId,
+        });
+        resetAlertEventForDispatch(db, {
+          id: alertEventId,
+          workspaceId: monitoringTarget.workspaceId,
+          alertPolicyId: effectivePolicy.id,
+          thresholdValue: effectivePolicy.riskThreshold,
+          riskScore: articleAnalysis.riskScore,
+          riskBand: articleAnalysis.riskBand,
+          status: initialStatus,
+          dispatchedAt: null,
+          updatedAt: now(),
+        });
+        return;
+      }
+
       createAlertEvent(db, {
         id: alertEventId,
         workspaceId: monitoringTarget.workspaceId,
@@ -503,7 +581,7 @@ async function runImmediateAlertDispatchJob({
         thresholdValue: effectivePolicy.riskThreshold,
         riskScore: articleAnalysis.riskScore,
         riskBand: articleAnalysis.riskBand,
-        status: enabledChannels.length > 0 ? 'dispatching' : 'suppressed',
+        status: initialStatus,
         triggeredAt,
         dispatchedAt: null,
         createdAt: triggeredAt,

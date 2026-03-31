@@ -11,7 +11,10 @@ const {
 const {
   completedArticleIngestionStatus,
 } = require('../src/db/schema/article-ingestion.cjs');
-const { activeMonitoringTargetStatus } = require('../src/db/schema/monitoring-target.cjs');
+const {
+  activeMonitoringTargetStatus,
+  pausedMonitoringTargetStatus,
+} = require('../src/db/schema/monitoring-target.cjs');
 
 function createDatabase() {
   const db = new DatabaseSync(':memory:');
@@ -219,6 +222,134 @@ function insertAlertPolicy(
     smsEnabled ? 1 : 0,
     smsRecipients,
   );
+}
+
+function insertAlertEvent(
+  db,
+  {
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    articleAnalysisId,
+    alertPolicyId = null,
+    thresholdValue = 70,
+    riskScore,
+    riskBand = 'high',
+    status = 'pending',
+    triggeredAt = '2026-03-30T20:50:00.000Z',
+    dispatchedAt = null,
+    createdAt = triggeredAt,
+    updatedAt = triggeredAt,
+  },
+) {
+  db.prepare(`
+    INSERT INTO alert_event (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      article_id,
+      article_analysis_id,
+      alert_policy_id,
+      threshold_value,
+      risk_score,
+      risk_band,
+      status,
+      triggered_at,
+      dispatched_at,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    articleAnalysisId,
+    alertPolicyId,
+    thresholdValue,
+    riskScore,
+    riskBand,
+    status,
+    triggeredAt,
+    dispatchedAt,
+    createdAt,
+    updatedAt,
+  );
+}
+
+function insertAlertDelivery(
+  db,
+  {
+    id,
+    workspaceId,
+    alertEventId,
+    alertPolicyId = null,
+    channel,
+    destination = null,
+    finalStatus = 'pending',
+    failureReason = null,
+    attemptedAt = null,
+    deliveredAt = null,
+    createdAt = '2026-03-30T20:51:00.000Z',
+    updatedAt = createdAt,
+  },
+) {
+  db.prepare(`
+    INSERT INTO alert_delivery (
+      id,
+      workspace_id,
+      alert_event_id,
+      alert_policy_id,
+      channel,
+      destination,
+      final_status,
+      failure_reason,
+      attempted_at,
+      delivered_at,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    workspaceId,
+    alertEventId,
+    alertPolicyId,
+    channel,
+    destination,
+    finalStatus,
+    failureReason,
+    attemptedAt,
+    deliveredAt,
+    createdAt,
+    updatedAt,
+  );
+}
+
+function insertAlertDeliveryDispatch(
+  db,
+  {
+    workspaceId,
+    alertDeliveryId,
+    payloadReference = null,
+    sentAt = null,
+    createdAt = '2026-03-30T20:51:30.000Z',
+    updatedAt = createdAt,
+  },
+) {
+  db.prepare(`
+    INSERT INTO alert_delivery_dispatch (
+      workspace_id,
+      alert_delivery_id,
+      payload_reference,
+      sent_at,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(workspaceId, alertDeliveryId, payloadReference, sentAt, createdAt, updatedAt);
 }
 
 function createIdGenerator(...ids) {
@@ -854,6 +985,262 @@ test('runImmediateAlertDispatchJob is idempotent for analyses that already have 
   assert.equal(dispatchCount, 1);
   assert.equal(eventCount.count, 1);
   assert.equal(deliveryCount.count, 1);
+
+  db.close();
+});
+
+test('runImmediateAlertDispatchJob skips paused monitoring targets', async () => {
+  const db = createDatabase();
+  let dispatchCount = 0;
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+    status: pausedMonitoringTargetStatus,
+  });
+  insertArticle(db, {
+    id: 'article-1',
+    workspaceId: 'workspace-1',
+    sourceUrl: 'https://source.example.com/article-1',
+  });
+  insertArticleContent(db, {
+    articleId: 'article-1',
+    workspaceId: 'workspace-1',
+    title: 'Acme Holdings faces bribery probe',
+    bodyText: 'Investigators expanded the bribery probe to senior leadership.',
+    publisherName: 'Daily Ledger',
+  });
+  insertArticleAnalysis(db, {
+    id: 'analysis-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    articleId: 'article-1',
+    riskScore: 88,
+    rationale: 'The article describes a widening bribery probe involving executives.',
+  });
+  insertAlertPolicy(db, {
+    id: 'policy-target-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    riskThreshold: 80,
+    slackEnabled: true,
+    slackWebhookUrl: 'https://hooks.slack.com/services/T000/B000/SLACK1',
+  });
+
+  const result = await runImmediateAlertDispatchJob({
+    db,
+    now: createNowSequence('2026-03-31T00:00:00.000Z'),
+    dispatchSlackAlert: async () => {
+      dispatchCount += 1;
+      return {
+        payloadReference: 'slack-message-1',
+        sentAt: '2026-03-31T00:00:01.000Z',
+      };
+    },
+  });
+
+  const eventCount = db
+    .prepare('SELECT COUNT(*) AS count FROM alert_event WHERE workspace_id = ?')
+    .get('workspace-1');
+
+  assert.deepEqual(result, {
+    processedAlerts: [],
+    totalProcessed: 0,
+    dispatchedAlerts: 0,
+  });
+  assert.equal(dispatchCount, 0);
+  assert.equal(eventCount.count, 0);
+
+  db.close();
+});
+
+test('runImmediateAlertDispatchJob retries existing dispatching events and replaces stale deliveries', async () => {
+  const db = createDatabase();
+  let dispatchCount = 0;
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertArticle(db, {
+    id: 'article-1',
+    workspaceId: 'workspace-1',
+    sourceUrl: 'https://source.example.com/article-1',
+  });
+  insertArticleContent(db, {
+    articleId: 'article-1',
+    workspaceId: 'workspace-1',
+    title: 'Acme Holdings faces bribery probe',
+    bodyText: 'Investigators expanded the bribery probe to senior leadership.',
+    publisherName: 'Daily Ledger',
+  });
+  insertArticleAnalysis(db, {
+    id: 'analysis-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    articleId: 'article-1',
+    riskScore: 88,
+    rationale: 'The article describes a widening bribery probe involving executives.',
+  });
+  insertAlertPolicy(db, {
+    id: 'policy-target-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    riskThreshold: 80,
+    slackEnabled: true,
+    slackWebhookUrl: 'https://hooks.slack.com/services/T000/B000/SLACK1',
+  });
+  insertAlertEvent(db, {
+    id: 'event-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    articleId: 'article-1',
+    articleAnalysisId: 'analysis-1',
+    alertPolicyId: 'policy-target-1',
+    thresholdValue: 80,
+    riskScore: 88,
+    status: 'dispatching',
+    triggeredAt: '2026-03-30T23:59:00.000Z',
+    createdAt: '2026-03-30T23:59:00.000Z',
+    updatedAt: '2026-03-30T23:59:00.000Z',
+  });
+  insertAlertDelivery(db, {
+    id: 'delivery-stale-1',
+    workspaceId: 'workspace-1',
+    alertEventId: 'event-1',
+    alertPolicyId: 'policy-target-1',
+    channel: 'slack',
+    destination: 'https://hooks.slack.com/services/T000/B000/OLD',
+    finalStatus: 'pending',
+    createdAt: '2026-03-30T23:59:01.000Z',
+    updatedAt: '2026-03-30T23:59:01.000Z',
+  });
+  insertAlertDeliveryDispatch(db, {
+    workspaceId: 'workspace-1',
+    alertDeliveryId: 'delivery-stale-1',
+    payloadReference: 'stale-message',
+    sentAt: '2026-03-30T23:59:02.000Z',
+    createdAt: '2026-03-30T23:59:02.000Z',
+    updatedAt: '2026-03-30T23:59:02.000Z',
+  });
+
+  const result = await runImmediateAlertDispatchJob({
+    db,
+    createId: createIdGenerator('delivery-slack-1'),
+    now: createNowSequence(
+      '2026-03-31T00:00:00.000Z',
+      '2026-03-31T00:00:01.000Z',
+      '2026-03-31T00:00:02.000Z',
+    ),
+    dispatchSlackAlert: async () => {
+      dispatchCount += 1;
+      return {
+        payloadReference: 'slack-message-1',
+        sentAt: '2026-03-31T00:00:01.500Z',
+      };
+    },
+  });
+
+  const savedEvent = db
+    .prepare(`
+      SELECT id, status, triggered_at, dispatched_at, updated_at
+      FROM alert_event
+      WHERE workspace_id = ? AND id = ?
+    `)
+    .get('workspace-1', 'event-1');
+  const savedDeliveries = db
+    .prepare(`
+      SELECT id, channel, destination, final_status
+      FROM alert_delivery
+      WHERE workspace_id = ?
+      ORDER BY id
+    `)
+    .all('workspace-1');
+  const savedDispatches = db
+    .prepare(`
+      SELECT alert_delivery_id, payload_reference, sent_at
+      FROM alert_delivery_dispatch
+      WHERE workspace_id = ?
+      ORDER BY alert_delivery_id
+    `)
+    .all('workspace-1');
+
+  assert.equal(dispatchCount, 1);
+  assert.deepEqual(result, {
+    processedAlerts: [
+      {
+        id: 'event-1',
+        workspaceId: 'workspace-1',
+        monitoringTargetId: 'target-1',
+        articleId: 'article-1',
+        articleAnalysisId: 'analysis-1',
+        alertPolicyId: 'policy-target-1',
+        thresholdValue: 80,
+        riskScore: 88,
+        riskBand: 'high',
+        status: 'delivered',
+        triggeredAt: '2026-03-30T23:59:00.000Z',
+        dispatchedAt: '2026-03-31T00:00:02.000Z',
+        deliveries: [
+          {
+            id: 'delivery-slack-1',
+            channel: 'slack',
+            destination: 'https://hooks.slack.com/services/T000/B000/SLACK1',
+            finalStatus: 'sent',
+            failureReason: null,
+            payloadReference: 'slack-message-1',
+            sentAt: '2026-03-31T00:00:01.500Z',
+          },
+        ],
+        payload: {
+          monitoringTargetName: 'Acme Holdings',
+          articleTitle: 'Acme Holdings faces bribery probe',
+          riskScore: 88,
+          riskBand: 'high',
+          rationale: 'The article describes a widening bribery probe involving executives.',
+          publisherName: 'Daily Ledger',
+          articleUrl: 'https://source.example.com/article-1',
+          thresholdValue: 80,
+        },
+      },
+    ],
+    totalProcessed: 1,
+    dispatchedAlerts: 1,
+  });
+  assert.deepEqual(normalizeRow(savedEvent), {
+    id: 'event-1',
+    status: 'delivered',
+    triggered_at: '2026-03-30T23:59:00.000Z',
+    dispatched_at: '2026-03-31T00:00:02.000Z',
+    updated_at: '2026-03-31T00:00:02.000Z',
+  });
+  assert.deepEqual(savedDeliveries.map(normalizeRow), [
+    {
+      id: 'delivery-slack-1',
+      channel: 'slack',
+      destination: 'https://hooks.slack.com/services/T000/B000/SLACK1',
+      final_status: 'sent',
+    },
+  ]);
+  assert.deepEqual(savedDispatches.map(normalizeRow), [
+    {
+      alert_delivery_id: 'delivery-slack-1',
+      payload_reference: 'slack-message-1',
+      sent_at: '2026-03-31T00:00:01.500Z',
+    },
+  ]);
 
   db.close();
 });
