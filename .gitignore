@@ -11,8 +11,9 @@ yarn-error.log*
 .pnpm-debug.log*
 .npm
 
-# shrimpt task manager
+# MCP
 shrimp_data/
+.mcp.json
 
 # Environment variables
 .env

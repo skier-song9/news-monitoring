@@ -4,7 +4,7 @@
       "command": "node",
       "args": ["~/mcp-shrimp-task-manager/dist/index.js"],
       "env": {
-        "DATA_DIR": "~/your/shrimp_data",
+        "DATA_DIR": "~/Documents/projects/news-monitoring/shrimp_data",
         "TEMPLATES_USE": "en",
         "ENABLE_GUI": "false"
       }
