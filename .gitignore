@@ -1,4 +1,4 @@
-# macOS
+i# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
@@ -14,7 +14,7 @@ yarn-error.log*
 # MCP
 shrimp_data/
 .mcp.json
-config.toml
+.codex/
 
 # Environment variables
 .env
