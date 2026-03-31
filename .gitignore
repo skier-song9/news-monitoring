@@ -14,6 +14,7 @@ yarn-error.log*
 # MCP
 shrimp_data/
 .mcp.json
+config.toml
 
 # Environment variables
 .env
