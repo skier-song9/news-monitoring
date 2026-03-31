@@ -1,0 +1,226 @@
+# Ralph Progress Log
+Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
+## Codebase Patterns
+- Put schema changes in `db/migrations` and verify them with dependency-free `node:sqlite` checks under `scripts/` and `tests/`.
+- Make migrations rerunnable with `IF NOT EXISTS`; `scripts/verify-workspace-schema.cjs` applies the same migration twice to catch duplicate-DDL failures.
+- When SQLite needs rerunnable schema expansion beyond `CREATE TABLE` or `CREATE INDEX`, prefer additive side tables over `ALTER TABLE ... ADD COLUMN` because the bundled engine here does not support `ADD COLUMN IF NOT EXISTS`.
+- Apply schema setup through `src/db/migrations.cjs` so tests and verifiers always run the full ordered migration set instead of hard-coding a single SQL file.
+- `scripts/lint.cjs` recursively syntax-checks `.cjs` files under `scripts`, `src`, and `tests`, so new modules are automatically covered by `npm run check`.
+- Model SQLite booleans as constrained integers like `is_active INTEGER CHECK (is_active IN (0, 1))`, and export the shared defaults from the matching `src/db/schema/*.cjs` module so tests verify the migration contract directly.
+- For tenant-scoped child tables, add a unique parent index on `(workspace_id, id)` before introducing composite foreign keys that must block cross-workspace references.
+- Use partial unique indexes for nullable dedupe keys such as `source_url`, `canonical_url`, and hashes so SQLite enforces idempotency without treating multiple `NULL` values as conflicts.
+- Use partial unique indexes on nullable scope foreign keys to model one workspace default row plus one target override row, such as `alert_policy` records with `monitoring_target_id IS NULL` versus `IS NOT NULL`.
+- For backend write flows, wrap multi-table SQLite mutations in an explicit transaction helper and inject `now`/ID/token generators so `node:test` coverage stays deterministic without mocking the database.
+- For workspace-owned backend writes, gate creation on an `active` `workspace_membership` row and persist seeded child records in the same transaction, using request order for fields like `display_order`.
+- For background jobs that call external services, inject the search/LLM adapters plus `now`/ID generators, and keep the final SQLite persistence step in a short transaction so reruns stay deterministic and easy to test.
+- For canonical article ingestion, keep dedupe identity in `article` and fetched body/source fields in a 1:1 `article_content` table so rerunnable migrations can add content storage without rebuilding the base article table.
+- For ordered keyword collections, treat `display_order` as scoped to a single `source_type`, and make reorder flows rewrite the full ID set for that source in one transaction.
+- When a target discovery rerun regenerates profile data, clear any saved review state in the same transaction so stale mismatch or approval decisions do not leak into the next review cycle.
+- For rerunnable analysis stages, keep one stable `article_analysis` row per `(workspace_id, monitoring_target_id, article_id)` and store fan-out evidence in a stage-specific side table so later enrichments can update their own fields without clobbering other analysis outputs.
+- For analysis stages that should not rerun on every scheduler pass, left-join `article_analysis` in the eligibility query and accept explicit `{ workspaceId, monitoringTargetId, articleId }` reanalysis keys so completed stage output is only replaced on demand.
+- When an analysis stage emits an ordered label list, persist the ordered JSON snapshot on `article_analysis` and replace the normalized row-per-label side table in the same transaction so reruns stay query-friendly and idempotent.
+- Keep derived score-band mapping in shared schema helpers and reuse those exports in backend jobs so runtime classification stays aligned with SQLite `CHECK` constraints.
+- Resolve alert settings from `alert_policy` with target scope first, then workspace scope, and finally the monitoring target's default threshold with all channels disabled when no saved policy exists.
+- For auditable alert dispatch jobs, insert the parent `alert_event` first, call external channel adapters outside the transaction, then persist per-channel `alert_delivery` records plus 1:1 dispatch metadata and the final event status in a second transaction.
+- For aggregate notification jobs derived from existing `alert_event` rows, keep batching state in additive side tables keyed back to source event IDs, and enforce a unique `(workspace_id, alert_event_id)` membership so reruns cannot rebatch the same immediate alert.
+- For article read APIs, treat `article_analysis` as the feed grain, use `article_analysis_topic_label` for topic filtering, and deserialize the ordered `article_analysis.topic_labels` JSON snapshot for the response payload.
+- Use `article_analysis.id` as the stable key for article detail and drilldown queries, because one canonical `article` can legitimately appear under multiple monitoring targets in the same workspace.
+- For analytics aggregations, query high-risk `article_analysis` rows with non-null `article_content.published_at`, normalize publisher/reporter labels case-insensitively, and return `articleAnalysisIds` with `articleIds` so drilldowns stay aligned with the feed grain.
+---
+## 2026-03-30 20:04:26 KST - US-001
+- Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
+- Files changed: `package.json`, `db/migrations/0001_workspace_membership_schema.sql`, `scripts/lint.cjs`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/workspace.cjs`, `tests/workspace-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: schema constants now live in `src/db/schema/workspace.cjs`, while migration integrity checks live in `scripts/verify-workspace-schema.cjs` and `tests/workspace-schema.test.cjs`.
+  - Gotchas encountered: SQLite composite foreign keys require a matching unique index with the same column order, so `workspace_membership` needs `(workspace_id, id)` indexed for tenant-scoped references.
+  - Useful context: `npm run check` is the project quality gate and currently runs syntax checks, executable migration verification, and the `node:test` suite.
+---
+## 2026-03-30 20:10:36 KST - US-002
+- Implemented the `monitoring_target` schema with workspace ownership, target type and lifecycle status checks, optional notes, and a default risk threshold field.
+- Added shared ordered migration loading so verification and tests run every SQL migration instead of a single hard-coded file.
+- Files changed: `db/migrations/0002_monitoring_target_schema.sql`, `scripts/lint.cjs`, `scripts/verify-workspace-schema.cjs`, `src/db/migrations.cjs`, `src/db/schema/monitoring-target.cjs`, `tests/monitoring-target-schema.test.cjs`, `tests/workspace-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: add new schema contracts in module-specific files like `src/db/schema/monitoring-target.cjs`, then reuse them from tests to keep migration literals and runtime constants aligned.
+  - Gotchas encountered: once multiple migrations exist, every schema verifier and test must apply the ordered migration set or they will silently miss later tables.
+  - Useful context: this story was schema-only, so browser verification was not applicable; `npm run check` remains the release gate for migration work.
+---
+## 2026-03-30 20:15:52 KST - US-003
+- Implemented the `target_keyword` schema with source type checks for seed, expanded, and excluded terms, plus active-state and display-order fields for each monitoring target.
+- Extended the schema verifier and added dedicated tests covering defaults, foreign-key ownership, and keyword constraint enforcement.
+- Files changed: `db/migrations/0003_target_keyword_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/target-keyword.cjs`, `tests/target-keyword-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep enum-like source type lists and default values in a module such as `src/db/schema/target-keyword.cjs`, then assert those exact exports in schema tests.
+  - Gotchas encountered: SQLite does not have a native boolean type, so active flags need integer storage plus explicit `CHECK` constraints if you want predictable validation.
+  - Useful context: this was schema-only work, so browser verification was not applicable; `npm run check` passed after the migration, verifier, and test additions.
+---
+## 2026-03-30 20:32:53 KST - US-004
+- Implemented the `article` and `article_candidate` schema, including tenant-scoped workspace ownership, ingestion-status fields, and dedupe indexes for portal hits plus canonical article identifiers.
+- Added shared ingestion-status constants, extended the schema verifier for the new tables, and covered defaults, foreign-key isolation, dedupe behavior, and status validation with new tests.
+- Files changed: `db/migrations/0004_article_ingestion_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/article-ingestion.cjs`, `tests/article-ingestion-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: when a child table must stay workspace-isolated even through an intermediate relation, add `(workspace_id, id)` unique indexes on the parent table and use composite foreign keys from the child.
+  - Gotchas encountered: SQLite partial unique indexes are the cleanest way to dedupe nullable URLs and hashes; plain unique constraints would still allow repeated `NULL` rows but are less explicit for future readers.
+  - Useful context: this was schema-only work, so browser verification was not applicable; `npm run check` passed after the migration, verifier, and test additions.
+---
+## 2026-03-30 20:42:06 KST - US-005
+- Implemented `article_analysis`, `alert_policy`, `alert_event`, and `alert_delivery` tables with tenant-scoped foreign keys, auditable timestamps, risk-band consistency checks, and per-channel delivery status tracking.
+- Added shared analysis and alert constants, extended the schema verifier for the new tables and indexes, and covered defaults, scope isolation, uniqueness, and check constraints with dedicated tests.
+- Files changed: `db/migrations/0005_analysis_alert_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/db/schema/analysis-alert.cjs`, `tests/analysis-alert-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: `alert_policy` uses partial unique indexes to enforce one workspace default policy plus one target-specific override row even though `monitoring_target_id` is nullable.
+  - Gotchas encountered: when a numeric score implies a categorical band, a database `CHECK` constraint is the safest place to enforce that mapping so later reanalysis jobs cannot persist mismatched snapshots.
+  - Useful context: no `AGENTS.md` files exist in this repo, so reusable notes were captured in this progress log instead; this was schema-only work, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 20:48:37 KST - US-006
+- Implemented a transactional workspace backend service with actions to create a workspace, invite teammates by email, and accept invitations into the correct workspace membership.
+- Added focused backend tests covering workspace bootstrap, admin-only invitation creation, successful invitation acceptance, and email mismatch rejection for invitation tokens.
+- Files changed: `src/backend/workspace-service.cjs`, `src/db/schema/workspace.cjs`, `tests/workspace-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: backend actions fit this repo best as dependency-free CommonJS service modules tested directly against `node:sqlite` with the real migrations applied.
+  - Gotchas encountered: rows returned by `node:sqlite` use a null prototype, so tests should normalize query results before strict deep equality assertions.
+  - Useful context: there are still no `AGENTS.md` files in the edited directories, so the reusable notes for this backend slice were captured here instead; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 20:54:28 KST - US-007
+- Implemented a transactional monitoring target backend service that creates a target with type, display name, note, default threshold, and ordered seed keywords in one write flow.
+- Added direct service tests covering successful target creation, seed keyword validation, active membership enforcement, and default threshold/note normalization.
+- Files changed: `src/backend/monitoring-target-service.cjs`, `src/db/schema/monitoring-target.cjs`, `tests/monitoring-target-service.test.cjs`, `tests/monitoring-target-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: use shared schema defaults like `defaultMonitoringTargetStatus` from `src/db/schema/*.cjs` in backend services so service behavior and migration tests stay aligned.
+  - Gotchas encountered: if target creation seeds related keyword rows, keep them inside the same transaction and assign `display_order` from the incoming array so later editing flows have a stable baseline.
+  - Useful context: there are still no `AGENTS.md` files in the edited directories, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 22:24:22 KST - US-008
+- Implemented the monitoring target discovery job that runs search against active seed keywords, calls an injected profile generator, stores the generated target profile, and replaces expanded keywords before moving the target to `ready_for_review`.
+- Added the `monitoring_target_profile` migration plus coverage for tenant scoping, rerunnable profile upserts, and expanded-keyword replacement on discovery reruns.
+- Files changed: `db/migrations/0006_monitoring_target_profile_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/monitoring-target-discovery-job.cjs`, `src/backend/monitoring-target-service.cjs`, `src/db/schema/monitoring-target.cjs`, `src/db/schema/target-keyword.cjs`, `tests/monitoring-target-discovery-job.test.cjs`, `tests/monitoring-target-profile-schema.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep background job integrations dependency-injected so `node:test` can exercise the real database flow without network mocking, then persist profile data and regenerated keywords in one transaction.
+  - Gotchas encountered: discovery reruns should reuse the existing profile row and delete only prior `expanded` keywords so seed and excluded terms remain intact for review.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so the reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed.
+---
+## 2026-03-30 22:33:59 KST - US-009
+- Implemented review and activation backend flows that save `match`, `partial_match`, and `mismatch` decisions, move approved targets into `awaiting_activation`, and require a separate activation call before a target becomes `active`.
+- Added persistent `monitoring_target_review` state plus discovery-job cleanup so mismatch-driven reruns clear stale review decisions before generating a fresh profile.
+- Files changed: `db/migrations/0007_monitoring_target_review_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/monitoring-target-discovery-job.cjs`, `src/backend/monitoring-target-service.cjs`, `src/db/schema/monitoring-target-review.cjs`, `src/db/schema/monitoring-target.cjs`, `tests/monitoring-target-discovery-job.test.cjs`, `tests/monitoring-target-review-schema.test.cjs`, `tests/monitoring-target-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep user review/activation state in a dedicated workspace-scoped table so lifecycle metadata can be reset independently from the generated target profile.
+  - Gotchas encountered: if a target is reopened after `mismatch`, the next discovery run must delete the old review row or the UI/backend will inherit stale approval state for a new profile.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 42 passing tests.
+---
+## 2026-03-30 22:43:14 KST - US-010
+- Implemented keyword-management backend operations to add, disable, remove, and reorder target keywords, plus a collector-input query that groups active seed, expanded, and excluded keywords for downstream jobs.
+- Added direct service tests covering source-type ordering, active-only collector filtering, delete/reindex behavior, and invalid reorder payloads.
+- Files changed: `src/backend/monitoring-target-service.cjs`, `tests/monitoring-target-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep keyword ordering scoped to one `source_type`, and require reorder requests to submit the complete ID set for that source before rewriting sequential `display_order` values.
+  - Gotchas encountered: collector-facing keyword queries should filter `is_active = 1` in SQL so disabled rows stay stored without leaking into collection jobs.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 47 passing tests.
+---
+## 2026-03-30 22:52:37 KST - US-011
+- Implemented a scheduled portal search collector job that loads active targets, passes active seed, expanded, and excluded keywords into injected Naver, Nate, and Google News adapters, and upserts article candidates idempotently.
+- Added a rerunnable article-candidate portal metadata table so each stored hit keeps portal title, snippet, and publish-time context alongside the candidate crawl status.
+- Files changed: `db/migrations/0008_article_candidate_portal_metadata.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/portal-search-collector.cjs`, `src/db/schema/article-ingestion.cjs`, `tests/article-ingestion-schema.test.cjs`, `tests/portal-search-collector.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep external portal adapters dependency-injected, then persist each portal batch in a short transaction so scheduled collectors stay deterministic under `node:test`.
+  - Gotchas encountered: candidate refresh logic should reset retryable `failed` hits back to `pending` while preserving already `linked` candidates, otherwise reruns either strand retries or break canonical article links.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, so reusable notes stayed in this progress log; this story had no UI surface, so browser verification was not applicable, and `npm run check` passed with 52 passing tests.
+---
+## 2026-03-30 23:02:01 KST - US-012
+- Implemented the original-article ingestion job that fetches pending or retryable candidates with source URLs, hashes normalized titles and bodies for canonical dedupe, stores article content metadata, and links candidates to the resolved canonical article row.
+- Added the `article_content` migration plus updated schema verification and tests for tenant scoping, hash-based dedupe behavior, canonical upserts, and retryable failure recording.
+- Files changed: `db/migrations/0009_article_content_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/original-article-ingestion-job.cjs`, `src/db/schema/article-ingestion.cjs`, `tests/article-ingestion-schema.test.cjs`, `tests/original-article-ingestion-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep canonical identity and dedupe keys on the base `article` row, then upsert fetched title/body/source metadata through a separate `article_content` row keyed by `(workspace_id, article_id)`.
+  - Gotchas encountered: body-hash uniqueness alone is too aggressive for canonical dedupe, so use a partial unique index on `(workspace_id, normalized_title_hash, body_hash)` and update the verifier/tests together when that contract changes.
+  - Useful context: the ingestion job accepts an injected `fetchOriginalArticle` adapter and passes through portal metadata from `article_candidate_portal_metadata`; there are still no nearby `AGENTS.md` files to update, this story had no UI surface, and `npm run check` passed with 57 passing tests.
+---
+## 2026-03-30 23:12:15 KST - US-013
+- Implemented `runArticleRelevanceScoringJob` to score each distinct target/article pair whose canonical article ingestion is complete, reusing active collector keywords and upserting the relevance fields on `article_analysis`.
+- Added `article_analysis_relevance_signal` storage so matched keywords and entity signals are replaced atomically on reruns without overwriting topic, summary, or risk fields from later analysis stages.
+- Files changed: `db/migrations/0010_article_analysis_relevance_signal_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/article-relevance-scoring-job.cjs`, `src/db/schema/analysis-alert.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/article-relevance-scoring-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keep rerunnable evidence for one analysis stage in its own side table and let the shared `article_analysis` row hold only the stage timestamps/scores that must compose with later enrichments.
+  - Gotchas encountered: stage reruns must update only their own columns on `article_analysis`; replacing the full row would wipe topic labels, summaries, or risk data produced by subsequent jobs.
+  - Useful context: `runArticleRelevanceScoringJob` reuses `getMonitoringTargetCollectorInput`, so active seed/expanded/excluded keyword filtering stays centralized; there are still no nearby `AGENTS.md` files to update, this story had no UI surface, and `npm run check` passed with 61 passing tests.
+---
+## 2026-03-30 23:20:00 KST - US-014
+- Implemented `runArticleTopicClassificationJob` to classify each distinct target/article pair whose canonical article ingestion is complete, upserting ordered topic labels onto `article_analysis` without creating duplicate analysis rows on reruns.
+- Added `article_analysis_topic_label` as a rerunnable side table so topic labels are replaced atomically in normalized form alongside the JSON snapshot stored on the shared analysis row.
+- Files changed: `db/migrations/0011_article_analysis_topic_label_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/article-topic-classification-job.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/article-topic-classification-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: for ordered topic outputs, keep the API-facing JSON array on `article_analysis` and mirror the same values in a stage-specific side table so later jobs can query or replace them without parsing JSON.
+  - Gotchas encountered: topic-classification reruns need to delete prior `article_analysis_topic_label` rows inside the same transaction as the `article_analysis` update or stale labels will survive after a narrower recategorization.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 65 passing tests.
+---
+## 2026-03-30 23:26:54 KST - US-015
+- Implemented `runArticleSummaryGenerationJob` to summarize each completed target/article pair once, persist the summary plus model version and completion timestamp on `article_analysis`, and only replace an existing summary when an explicit reanalysis request is supplied.
+- Added direct service tests covering first-run summary generation, selective reanalysis replacement for an existing analysis row, and rejection of summaries longer than three sentences.
+- Files changed: `src/backend/article-summary-generation-job.cjs`, `tests/article-summary-generation-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: when an analysis stage should be incremental rather than unconditional, select eligible articles with a `LEFT JOIN` on `article_analysis` and gate reruns behind explicit reanalysis keys.
+  - Gotchas encountered: the shared `article_analysis.model_version` field is overwritten by whichever analysis stage ran most recently, so stage-specific updates must avoid touching unrelated columns while still refreshing their own completion timestamp.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 68 passing tests.
+---
+## 2026-03-30 23:34:20 KST - US-016
+- Implemented `runArticleRiskScoringJob` to score each completed target/article pair once, derive the stored risk band from the numeric score, persist rationale plus model version and completion timestamp, and allow explicit reanalysis for already-scored articles.
+- Added a shared risk-band helper in `src/db/schema/analysis-alert.cjs` so backend jobs reuse the same score-to-band mapping contract enforced by the migration.
+- Files changed: `src/backend/article-risk-scoring-job.cjs`, `src/db/schema/analysis-alert.cjs`, `tests/article-risk-scoring-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: use explicit reanalysis requests for expensive late-stage LLM analysis jobs so existing completed rows are skipped unless a caller asks to refresh them.
+  - Gotchas encountered: `article_analysis.model_version` is still a shared column, so risk-scoring updates must only touch risk fields plus the shared version/timestamp fields and leave relevance, topics, and summary data intact.
+  - Useful context: there are no `AGENTS.md` files anywhere in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 71 passing tests.
+---
+## 2026-03-30 23:43:40 KST - US-017
+- Implemented `alert-policy-service` backend actions to upsert workspace and target alert policies, validate Slack/email/SMS destinations, and normalize recipient storage for later dispatch jobs.
+- Added effective alert policy resolution that prefers target overrides over workspace defaults and otherwise falls back to the monitoring target threshold with all channels disabled.
+- Files changed: `src/backend/alert-policy-service.cjs`, `tests/alert-policy-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: alert recipient lists are stored as normalized JSON arrays in the existing `TEXT` columns so backend services can round-trip structured email and SMS destinations without adding join tables.
+  - Gotchas encountered: because `alert_policy` override rows are whole-policy records, target-specific saves need to start from the current effective policy to avoid unintentionally dropping threshold or channel settings that were inherited before the override was created.
+  - Useful context: there are still no nearby `AGENTS.md` files to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 76 passing tests.
+---
+## 2026-03-30 23:52:52 KST - US-018
+- Implemented `runImmediateAlertDispatchJob` to create one immediate `alert_event` per newly scored article analysis that meets the effective threshold, build the alert payload, and dispatch enabled Slack, email, and SMS deliveries without duplicating reruns.
+- Added `alert_delivery_dispatch` as a rerunnable 1:1 metadata table so each channel delivery can persist payload references and `sent_at` audit data alongside the existing `alert_delivery` status row.
+- Files changed: `db/migrations/0012_alert_delivery_dispatch_schema.sql`, `src/backend/immediate-alert-dispatch-job.cjs`, `scripts/verify-workspace-schema.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/immediate-alert-dispatch-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: immediate alert jobs in this codebase should create the parent `alert_event` before dispatch, then persist channel results and final status in a follow-up transaction so partial failures stay auditable.
+  - Gotchas encountered: `alert_delivery` is unique per `(workspace_id, alert_event_id, channel)`, so provider payload references need a side table instead of widening the base table through a non-rerunnable `ALTER TABLE`.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 80 passing tests.
+---
+## 2026-03-31 00:06:18 KST - US-019
+- Implemented `runOneMinuteAlertBatchingJob` plus additive `alert_batch*` tables to group unbatched high-risk `alert_event` rows by workspace and monitoring target across a deterministic one-minute window anchored on the first event in each group.
+- Added schema coverage and job tests for highest-risk article selection, aggregate counts, suppressed batches with no enabled channels, and rerun idempotency without creating duplicate immediate `alert_event` rows.
+- Files changed: `db/migrations/0013_alert_batch_schema.sql`, `scripts/verify-workspace-schema.cjs`, `src/backend/one-minute-alert-batching-job.cjs`, `src/db/schema/analysis-alert.cjs`, `tests/analysis-alert-schema.test.cjs`, `tests/one-minute-alert-batching-job.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: batch notifications should treat existing `alert_event` rows as immutable source records and persist grouping state in side tables so immediate alerts and batch alerts can coexist without relaxing source uniqueness constraints.
+  - Gotchas encountered: if batching windows need rerun safety, insert the batch row and its source-event membership records before dispatching any channels, otherwise retries can create a second batch for the same alert set.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 83 passing tests.
+---
+## 2026-03-31 00:14:53 KST - US-020
+- Implemented `listArticleFeed` as a backend query service that gates on active workspace membership and supports monitoring target, risk band, topic, publisher, publish-date range, and sort filters for dashboard article slices.
+- Added direct query-service tests covering the default highest-risk ordering, response field mapping, filter combinations, explicit sort handling, and workspace access rejection.
+- Files changed: `src/backend/article-feed-query-service.cjs`, `tests/article-feed-query-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: article dashboard queries should read from `article_analysis` so each row stays target-specific, while topic filters should hit the normalized `article_analysis_topic_label` table and the response should use parsed `topic_labels` JSON to preserve label order.
+  - Gotchas encountered: publisher filtering is more reliable as a trimmed case-insensitive comparison because stored publisher names are not normalized to a single case in the ingestion layer.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 87 passing tests.
+---
+## 2026-03-31 00:21:41 KST - US-021
+- Implemented `getArticleDetail` as a backend query service keyed by `articleAnalysisId`, returning summary, rationale, matched keyword and entity signals, plus canonical/source/portal links for a single target-specific article analysis.
+- Added direct query-service tests covering detail response mapping, empty related-record fallbacks, workspace access rejection, and not-found behavior for out-of-scope analysis IDs.
+- Files changed: `src/backend/article-detail-query-service.cjs`, `tests/article-detail-query-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: article detail lookups should key off `article_analysis.id` and pull evidence from `article_analysis_relevance_signal`, since the same canonical `article` may need separate detail views per monitoring target.
+  - Gotchas encountered: the only ingestion timestamp currently stored for detail queries is `article_content.fetched_at`, so detail responses need to surface that with `published_at` instead of assuming an `article.ingested_at` column exists.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 90 passing tests.
+---
+## 2026-03-31 00:29:55 KST - US-022
+- Implemented `getArticleAnalyticsAggregates` to return high-risk topic, publisher, and reporter summaries over an optional target/date slice, with drilldown `articleAnalysisIds` and canonical `articleIds` for each aggregate row.
+- Added direct query-service tests covering multi-dimension aggregation, target filtering, workspace access control, date validation, case-insensitive publisher grouping, and exclusion of medium-risk or undated articles.
+- Files changed: `src/backend/article-analytics-query-service.cjs`, `tests/article-analytics-query-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: analytics queries in this repo should aggregate from `article_analysis` rather than `article`, because drilldowns and UI reads are target-specific.
+  - Gotchas encountered: publisher and reporter names are not normalized at ingestion time, so aggregation code must collapse them case-insensitively or rankings will split the same source into duplicate buckets.
+  - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 93 passing tests.
+---
