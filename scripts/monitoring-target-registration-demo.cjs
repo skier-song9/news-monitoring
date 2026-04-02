@@ -19,6 +19,10 @@ const {
   completedArticleIngestionStatus,
 } = require('../src/db/schema/article-ingestion.cjs');
 const {
+  entityArticleAnalysisRelevanceSignalType,
+  keywordArticleAnalysisRelevanceSignalType,
+} = require('../src/db/schema/analysis-alert.cjs');
+const {
   createMonitoringTargetRegistrationApp,
 } = require('../src/http/monitoring-target-registration-app.cjs');
 
@@ -194,6 +198,52 @@ function insertTopicLabel(db, { workspaceId, articleAnalysisId, topicLabel }) {
     )
     VALUES (?, ?, ?)
   `).run(workspaceId, articleAnalysisId, topicLabel);
+}
+
+function insertArticleCandidate(
+  db,
+  {
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    portalUrl,
+    sourceUrl = null,
+    ingestionStatus = 'linked',
+  },
+) {
+  db.prepare(`
+    INSERT INTO article_candidate (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      article_id,
+      portal_url,
+      source_url,
+      ingestion_status
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    portalUrl,
+    sourceUrl,
+    ingestionStatus,
+  );
+}
+
+function insertRelevanceSignal(db, { workspaceId, articleAnalysisId, signalType, signalValue }) {
+  db.prepare(`
+    INSERT INTO article_analysis_relevance_signal (
+      workspace_id,
+      article_analysis_id,
+      signal_type,
+      signal_value
+    )
+    VALUES (?, ?, ?, ?)
+  `).run(workspaceId, articleAnalysisId, signalType, signalValue);
 }
 
 function createIdGenerator(...ids) {
@@ -380,6 +430,40 @@ function seedDashboardDemoData(db, workspaceId) {
     workspaceId,
     articleAnalysisId: 'analysis-dashboard-1',
     topicLabel: 'legal',
+  });
+  insertArticleCandidate(db, {
+    id: 'candidate-dashboard-1',
+    workspaceId,
+    monitoringTargetId: 'target-dashboard-acme',
+    articleId: 'article-dashboard-1',
+    portalUrl: 'https://search.naver.com/acme-governance',
+    sourceUrl: 'https://example.com/acme-governance',
+  });
+  insertArticleCandidate(db, {
+    id: 'candidate-dashboard-2',
+    workspaceId,
+    monitoringTargetId: 'target-dashboard-acme',
+    articleId: 'article-dashboard-1',
+    portalUrl: 'https://news.google.com/acme-governance',
+    sourceUrl: 'https://example.com/acme-governance',
+  });
+  insertRelevanceSignal(db, {
+    workspaceId,
+    articleAnalysisId: 'analysis-dashboard-1',
+    signalType: keywordArticleAnalysisRelevanceSignalType,
+    signalValue: 'Acme Holdings',
+  });
+  insertRelevanceSignal(db, {
+    workspaceId,
+    articleAnalysisId: 'analysis-dashboard-1',
+    signalType: keywordArticleAnalysisRelevanceSignalType,
+    signalValue: 'whistleblower filing',
+  });
+  insertRelevanceSignal(db, {
+    workspaceId,
+    articleAnalysisId: 'analysis-dashboard-1',
+    signalType: entityArticleAnalysisRelevanceSignalType,
+    signalValue: 'regulators',
   });
 
   insertArticle(db, {

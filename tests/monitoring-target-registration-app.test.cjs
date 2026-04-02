@@ -13,6 +13,10 @@ const {
 const {
   completedArticleIngestionStatus,
 } = require('../src/db/schema/article-ingestion.cjs');
+const {
+  entityArticleAnalysisRelevanceSignalType,
+  keywordArticleAnalysisRelevanceSignalType,
+} = require('../src/db/schema/analysis-alert.cjs');
 const { createWorkspace } = require('../src/backend/workspace-service.cjs');
 const {
   getMonitoringTargetCollectorInput,
@@ -199,6 +203,52 @@ function insertTopicLabel(db, { workspaceId, articleAnalysisId, topicLabel }) {
     )
     VALUES (?, ?, ?)
   `).run(workspaceId, articleAnalysisId, topicLabel);
+}
+
+function insertArticleCandidate(
+  db,
+  {
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    portalUrl,
+    sourceUrl = null,
+    ingestionStatus = 'linked',
+  },
+) {
+  db.prepare(`
+    INSERT INTO article_candidate (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      article_id,
+      portal_url,
+      source_url,
+      ingestion_status
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    portalUrl,
+    sourceUrl,
+    ingestionStatus,
+  );
+}
+
+function insertRelevanceSignal(db, { workspaceId, articleAnalysisId, signalType, signalValue }) {
+  db.prepare(`
+    INSERT INTO article_analysis_relevance_signal (
+      workspace_id,
+      article_analysis_id,
+      signal_type,
+      signal_value
+    )
+    VALUES (?, ?, ?, ?)
+  `).run(workspaceId, articleAnalysisId, signalType, signalValue);
 }
 
 function insertKeyword(
@@ -477,6 +527,40 @@ function seedArticleDashboardData(db) {
     workspaceId: 'workspace-1',
     articleAnalysisId: 'analysis-dashboard-1',
     topicLabel: 'legal',
+  });
+  insertArticleCandidate(db, {
+    id: 'candidate-dashboard-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-dashboard-acme',
+    articleId: 'article-dashboard-1',
+    portalUrl: 'https://search.naver.com/acme-governance',
+    sourceUrl: 'https://example.com/acme-governance',
+  });
+  insertArticleCandidate(db, {
+    id: 'candidate-dashboard-2',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-dashboard-acme',
+    articleId: 'article-dashboard-1',
+    portalUrl: 'https://news.google.com/acme-governance',
+    sourceUrl: 'https://example.com/acme-governance',
+  });
+  insertRelevanceSignal(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-1',
+    signalType: keywordArticleAnalysisRelevanceSignalType,
+    signalValue: 'Acme Holdings',
+  });
+  insertRelevanceSignal(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-1',
+    signalType: keywordArticleAnalysisRelevanceSignalType,
+    signalValue: 'whistleblower filing',
+  });
+  insertRelevanceSignal(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-1',
+    signalType: entityArticleAnalysisRelevanceSignalType,
+    signalValue: 'regulators',
   });
 
   insertArticle(db, {
@@ -1478,9 +1562,55 @@ test('article dashboard page renders live feed cards, filters, and polling scrip
     assert.match(response.body, /Jane Doe outlines a cautious hiring plan in town hall remarks/u);
     assert.match(response.body, /Financial Dispatch/u);
     assert.match(response.body, /Naomi Park/u);
+    assert.match(response.body, /Inspect article/u);
+    assert.match(
+      response.body,
+      /href="\/workspaces\/workspace-1\/articles\/analysis-dashboard-1\?userId=user-member"/u,
+    );
     assert.match(response.body, /data-live-results/u);
     assert.match(response.body, /window\.__articleDashboardRefreshCount/u);
     assert.match(response.body, /polls the server without reloading the page/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('article detail page is reachable from the dashboard and renders rationale, keywords, links, and timestamps', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedArticleDashboardData(db);
+  const server = await startServer(db);
+
+  try {
+    const response = await request(server, {
+      path: '/workspaces/workspace-1/articles/analysis-dashboard-1?userId=user-member&monitoringTargetId=target-dashboard-acme&riskBand=high',
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /Back to live article dashboard/u);
+    assert.match(
+      response.body,
+      /href="\/workspaces\/workspace-1\/articles\?userId=user-member&amp;monitoringTargetId=target-dashboard-acme&amp;riskBand=high"/u,
+    );
+    assert.match(response.body, /Acme faces governance investigation after whistleblower filing/u);
+    assert.match(response.body, /Governance concerns intensified after the filing reached regulators\./u);
+    assert.match(
+      response.body,
+      /A whistleblower-backed probe can materially escalate regulatory risk\./u,
+    );
+    assert.match(response.body, /Matched keywords/u);
+    assert.match(response.body, /Acme Holdings/u);
+    assert.match(response.body, /whistleblower filing/u);
+    assert.match(response.body, /Entity signals/u);
+    assert.match(response.body, /regulators/u);
+    assert.match(response.body, /Source links/u);
+    assert.match(response.body, /https:\/\/example\.com\/acme-governance/u);
+    assert.match(response.body, /https:\/\/search\.naver\.com\/acme-governance/u);
+    assert.match(response.body, /Latest stored analysis timestamps/u);
+    assert.match(response.body, /Relevance scored/u);
+    assert.match(response.body, /Summary generated/u);
+    assert.match(response.body, /Risk scored/u);
   } finally {
     await closeServer(server);
     db.close();

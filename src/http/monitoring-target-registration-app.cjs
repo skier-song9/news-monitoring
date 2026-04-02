@@ -9,6 +9,10 @@ const {
   saveWorkspaceAlertPolicy,
 } = require('../backend/alert-policy-service.cjs');
 const {
+  ArticleDetailQueryServiceError,
+  getArticleDetail,
+} = require('../backend/article-detail-query-service.cjs');
+const {
   ArticleFeedQueryServiceError,
   getArticleDashboardPage,
 } = require('../backend/article-feed-query-service.cjs');
@@ -29,6 +33,7 @@ const {
   renderMonitoringTargetReviewPage,
 } = require('../ui/monitoring-target-registration-page.cjs');
 const {
+  renderArticleDetailPage,
   renderArticleDashboardPage,
   renderArticleDashboardResults,
 } = require('../ui/article-dashboard-page.cjs');
@@ -75,6 +80,10 @@ function getAlertSettingsRouteMatch(pathname) {
 
 function getArticleDashboardRouteMatch(pathname) {
   return pathname.match(/^\/workspaces\/([^/]+)\/articles\/?$/u);
+}
+
+function getArticleDetailRouteMatch(pathname) {
+  return pathname.match(/^\/workspaces\/([^/]+)\/articles\/([^/]+)\/?$/u);
 }
 
 function parseFormBody(request) {
@@ -525,6 +534,14 @@ function buildAlertSettingsLocation(requestUrl, workspaceId, state = {}) {
 }
 
 function buildArticleDashboardLocation(requestUrl, workspaceId, state = {}) {
+  return buildArticleLocationWithState(
+    requestUrl,
+    `/workspaces/${encodeURIComponent(workspaceId)}/articles`,
+    state,
+  );
+}
+
+function buildArticleLocationWithState(requestUrl, pathname, state = {}) {
   const nextParams = new URLSearchParams();
   const userId = requestUrl.searchParams.get('userId');
 
@@ -546,8 +563,37 @@ function buildArticleDashboardLocation(requestUrl, workspaceId, state = {}) {
   }
 
   const search = nextParams.toString();
-  const pathname = `/workspaces/${encodeURIComponent(workspaceId)}/articles`;
   return search ? `${pathname}?${search}` : pathname;
+}
+
+function getArticleDashboardFilterState(requestUrl) {
+  const filterState = {};
+
+  for (const key of [
+    'monitoringTargetId',
+    'riskBand',
+    'topicLabel',
+    'publisher',
+    'publishedFrom',
+    'publishedTo',
+    'sort',
+  ]) {
+    const value = requestUrl.searchParams.get(key);
+
+    if (value != null) {
+      filterState[key] = value;
+    }
+  }
+
+  return filterState;
+}
+
+function buildArticleDetailLocation(requestUrl, workspaceId, articleAnalysisId, state = {}) {
+  return buildArticleLocationWithState(
+    requestUrl,
+    `/workspaces/${encodeURIComponent(workspaceId)}/articles/${encodeURIComponent(articleAnalysisId)}`,
+    state,
+  );
 }
 
 function getErrorStatusCode(error) {
@@ -563,6 +609,18 @@ function getErrorStatusCode(error) {
 
 function getArticleFeedErrorStatusCode(error) {
   if (error.code === 'WORKSPACE_NOT_FOUND') {
+    return 404;
+  }
+
+  if (error.code === 'INVALID_INPUT') {
+    return 400;
+  }
+
+  return 403;
+}
+
+function getArticleDetailErrorStatusCode(error) {
+  if (error.code === 'ARTICLE_DETAIL_NOT_FOUND') {
     return 404;
   }
 
@@ -761,13 +819,26 @@ function createMonitoringTargetRegistrationApp({
             publishedTo: requestUrl.searchParams.get('publishedTo'),
             sort: requestUrl.searchParams.get('sort'),
           });
+          const dashboardFilterState = getArticleDashboardFilterState(requestUrl);
+          const dashboardPageForRender = {
+            ...dashboardPage,
+            articles: dashboardPage.articles.map((article) => ({
+              ...article,
+              detailHref: buildArticleDetailLocation(
+                requestUrl,
+                workspaceId,
+                article.articleAnalysisId,
+                dashboardFilterState,
+              ),
+            })),
+          };
 
           if (requestUrl.searchParams.get('fragment') === 'results') {
             sendHtml(
               response,
               200,
               renderArticleDashboardResults({
-                dashboardPage,
+                dashboardPage: dashboardPageForRender,
               }),
             );
             return;
@@ -777,13 +848,56 @@ function createMonitoringTargetRegistrationApp({
             response,
             200,
             renderArticleDashboardPage({
-              dashboardPage,
+              dashboardPage: dashboardPageForRender,
               clearFiltersHref: buildArticleDashboardLocation(requestUrl, workspaceId),
             }),
           );
         } catch (error) {
           if (error instanceof ArticleFeedQueryServiceError) {
             sendText(response, getArticleFeedErrorStatusCode(error), error.message);
+            return;
+          }
+
+          throw error;
+        }
+
+        return;
+      }
+
+      sendText(response, 405, 'Method not allowed');
+      return;
+    }
+
+    const articleDetailRouteMatch = getArticleDetailRouteMatch(requestUrl.pathname);
+
+    if (articleDetailRouteMatch) {
+      const workspaceId = decodeURIComponent(articleDetailRouteMatch[1]);
+      const articleAnalysisId = decodeURIComponent(articleDetailRouteMatch[2]);
+
+      if (request.method === 'GET') {
+        try {
+          const articleDetail = getArticleDetail({
+            db,
+            workspaceId,
+            userId,
+            articleAnalysisId,
+          });
+
+          sendHtml(
+            response,
+            200,
+            renderArticleDetailPage({
+              articleDetail,
+              backHref: buildArticleDashboardLocation(
+                requestUrl,
+                workspaceId,
+                getArticleDashboardFilterState(requestUrl),
+              ),
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ArticleDetailQueryServiceError) {
+            sendText(response, getArticleDetailErrorStatusCode(error), error.message);
             return;
           }
 

@@ -33,6 +33,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For multi-scope settings screens, seed each form from the current effective backend policy and round-trip `scope` plus form values in query params so redirect-based validation returns to the correct card without losing inherited defaults.
 - When review surfaces show third-party evidence links, validate stored URLs as absolute `http`/`https` during ingestion and still sanitize anchors at render time so legacy rows cannot become scriptable links.
 - For live server-rendered dashboards, keep the main GET page and a `fragment=results` GET variant on the same route, then poll that fragment from a small browser script so new records can appear without introducing a separate API surface.
+- For dashboard drill-down UIs, link cards by `article_analysis.id` and preserve the current feed filters in query params so detail pages can return users to the exact slice they came from.
 - When HTML date inputs back an ISO timestamp filter, expand date-only `publishedFrom` and `publishedTo` values to UTC start-of-day and end-of-day boundaries in the query service so same-day filtering matches user expectations.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
@@ -285,4 +286,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: server-rendered dashboard pages in this repo work well when the backend returns both filter options and result rows, while the HTTP layer stays limited to query-param plumbing and fragment/full-page selection.
   - Gotchas encountered: HTML date inputs submit date-only values, so the feed query layer must widen `publishedTo` to the end of day or same-day filtering will silently exclude later articles.
   - Useful context: browser verification used `npm run article-dashboard-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/articles?userId=user-owner`; the dashboard rendered five article cards after live polling, `window.__articleDashboardRefreshCount` incremented to `1`, architect review approved the slice, and the post-deslop `npm run check` pass stayed green with 125 passing tests.
+---
+## 2026-04-02 13:40:30 KST - US-029
+- Implemented a server-rendered article detail page at `/workspaces/:workspaceId/articles/:articleAnalysisId`, wired from each live dashboard card through the existing article detail query service and preserving the current dashboard slice in the back link.
+- Added detail-page coverage for summary, risk rationale, matched keywords, sanitized source links, and latest stored analysis timestamps, then extended the dashboard demo seed with relevance signals and portal hits for browser verification.
+- Files changed: `scripts/monitoring-target-registration-demo.cjs`, `src/http/monitoring-target-registration-app.cjs`, `src/ui/article-dashboard-page.cjs`, `tests/monitoring-target-registration-app.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: dashboard drill-down links should keep the current filter query params on the detail URL so the return path lands back on the same live feed slice.
+  - Gotchas encountered: stored article URLs need the same render-time `http`/`https` sanitization as other third-party evidence links because legacy rows can bypass ingestion-time validation.
+  - Useful context: browser verification used `npm run article-dashboard-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/articles?userId=user-owner`, followed the first `Inspect article` link into `/workspaces/workspace-1/articles/analysis-dashboard-1?userId=user-owner`, confirmed source links plus analysis timestamps on the detail page, there were still no `AGENTS.md` files in this repository to update, and the post-deslop `npm run check` pass stayed green with 126 passing tests.
 ---
