@@ -5,9 +5,12 @@ const { URL, URLSearchParams } = require('node:url');
 const {
   MonitoringTargetServiceError,
   activateMonitoringTarget,
+  addTargetKeyword,
   createMonitoringTarget,
+  disableTargetKeyword,
   getMonitoringTargetRegistrationPage,
   getMonitoringTargetReviewWorkflow,
+  removeTargetKeyword,
   saveMonitoringTargetReviewDecision,
 } = require('../backend/monitoring-target-service.cjs');
 const {
@@ -158,6 +161,17 @@ function buildReviewFlashMessage(requestUrl) {
     };
   }
 
+  const keywordAction = requestUrl.searchParams.get('keywordAction');
+  const keywordSourceType = requestUrl.searchParams.get('keywordSourceType');
+
+  if (keywordAction && keywordSourceType) {
+    return {
+      type: 'success',
+      title: 'Keyword updated',
+      message: buildKeywordActionMessage(keywordAction, keywordSourceType),
+    };
+  }
+
   if (requestUrl.searchParams.get('created') !== '1') {
     return null;
   }
@@ -167,6 +181,40 @@ function buildReviewFlashMessage(requestUrl) {
     title: 'Target saved',
     message: 'Your monitoring target is ready for the review workflow.',
   };
+}
+
+function formatKeywordSourceLabel(sourceType) {
+  if (sourceType === 'seed') {
+    return 'Seed';
+  }
+
+  if (sourceType === 'expanded') {
+    return 'Expanded';
+  }
+
+  if (sourceType === 'excluded') {
+    return 'Excluded';
+  }
+
+  return 'Keyword';
+}
+
+function buildKeywordActionMessage(action, sourceType) {
+  const sourceLabel = formatKeywordSourceLabel(sourceType);
+
+  if (action === 'added') {
+    return `${sourceLabel} keyword saved.`;
+  }
+
+  if (action === 'disabled') {
+    return `${sourceLabel} keyword disabled for future collector input.`;
+  }
+
+  if (action === 'removed') {
+    return `${sourceLabel} keyword removed.`;
+  }
+
+  return `${sourceLabel} keywords updated.`;
 }
 
 function buildRegistrationLocation(requestUrl, formValues, errorMessage) {
@@ -221,6 +269,29 @@ function getErrorStatusCode(error) {
   }
 
   return 403;
+}
+
+function assertKeywordEditingAllowed({
+  db,
+  workspaceId,
+  monitoringTargetId,
+  userId,
+}) {
+  const reviewWorkflow = getMonitoringTargetReviewWorkflow({
+    db,
+    workspaceId,
+    monitoringTargetId,
+    userId,
+  });
+
+  if (reviewWorkflow.keywordEditor.canEdit) {
+    return;
+  }
+
+  throw new MonitoringTargetServiceError(
+    'TARGET_KEYWORD_EDIT_FORBIDDEN',
+    reviewWorkflow.keywordEditor.blockedReason ?? 'Keyword editing is unavailable.',
+  );
 }
 
 function createMonitoringTargetRegistrationApp({
@@ -393,6 +464,89 @@ function createMonitoringTargetRegistrationApp({
         try {
           const formData = await parseFormBody(request);
           const action = normalizeFormValue(formData.get('action'));
+
+          if (action === 'add-keyword') {
+            assertKeywordEditingAllowed({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              userId,
+            });
+
+            const targetKeyword = addTargetKeyword({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              userId,
+              keyword: normalizeFormValue(formData.get('keyword')),
+              sourceType: normalizeFormValue(formData.get('sourceType')),
+              now,
+              createId,
+            });
+
+            redirect(
+              response,
+              buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, {
+                keywordAction: 'added',
+                keywordSourceType: targetKeyword.sourceType,
+              }),
+            );
+            return;
+          }
+
+          if (action === 'disable-keyword') {
+            assertKeywordEditingAllowed({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              userId,
+            });
+
+            const targetKeyword = disableTargetKeyword({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              targetKeywordId: normalizeFormValue(formData.get('targetKeywordId')),
+              userId,
+              now,
+            });
+
+            redirect(
+              response,
+              buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, {
+                keywordAction: 'disabled',
+                keywordSourceType: targetKeyword.sourceType,
+              }),
+            );
+            return;
+          }
+
+          if (action === 'remove-keyword') {
+            assertKeywordEditingAllowed({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              userId,
+            });
+
+            const targetKeyword = removeTargetKeyword({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              targetKeywordId: normalizeFormValue(formData.get('targetKeywordId')),
+              userId,
+              now,
+            });
+
+            redirect(
+              response,
+              buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, {
+                keywordAction: 'removed',
+                keywordSourceType: targetKeyword.sourceType,
+              }),
+            );
+            return;
+          }
 
           if (action === 'save-review') {
             const decision = normalizeFormValue(formData.get('decision'));

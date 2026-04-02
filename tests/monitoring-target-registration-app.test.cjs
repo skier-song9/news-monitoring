@@ -8,6 +8,9 @@ const { DatabaseSync } = require('node:sqlite');
 const { applyMigrations } = require('../src/db/migrations.cjs');
 const { createWorkspace } = require('../src/backend/workspace-service.cjs');
 const {
+  getMonitoringTargetCollectorInput,
+} = require('../src/backend/monitoring-target-service.cjs');
+const {
   createMonitoringTargetRegistrationApp,
 } = require('../src/http/monitoring-target-registration-app.cjs');
 
@@ -242,6 +245,20 @@ function seedReviewReadyTarget(db) {
     monitoringTargetId: 'target-review-1',
     keyword: 'Jane Doe',
     sourceType: 'expanded',
+    displayOrder: 1,
+  });
+  insertKeyword(db, {
+    id: 'excluded-review-1',
+    monitoringTargetId: 'target-review-1',
+    keyword: 'Acme Jobs',
+    sourceType: 'excluded',
+    displayOrder: 0,
+  });
+  insertKeyword(db, {
+    id: 'excluded-review-2',
+    monitoringTargetId: 'target-review-1',
+    keyword: 'Acme Careers',
+    sourceType: 'excluded',
     displayOrder: 1,
   });
   insertProfile(db, {
@@ -498,6 +515,13 @@ test('target review page shows generated profile signals and keeps activation di
     assert.match(response.body, /Jane Doe/u);
     assert.match(response.body, /Acme Labs/u);
     assert.match(response.body, /Acme founder/u);
+    assert.match(response.body, /Acme Jobs/u);
+    assert.match(response.body, /Seed keywords/u);
+    assert.match(response.body, /Expanded keywords/u);
+    assert.match(response.body, /Excluded keywords/u);
+    assert.match(response.body, /value="add-keyword"/u);
+    assert.match(response.body, /value="disable-keyword"/u);
+    assert.match(response.body, /value="remove-keyword"/u);
     assert.match(response.body, /name="decision"/u);
     assert.match(response.body, /value="match"/u);
     assert.match(response.body, /value="partial_match"/u);
@@ -625,6 +649,147 @@ test('target review sanitizes non-http discovery evidence links', async () => {
     assert.equal(response.statusCode, 200);
     assert.match(response.body, /Unsafe result/u);
     assert.doesNotMatch(response.body, /href="javascript:alert\(1\)"/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('target review keyword actions persist add disable remove changes through activation', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedReviewReadyTarget(db);
+  const server = await startServer(db, {
+    createId: createIdGenerator('excluded-review-3', 'review-route-1'),
+  });
+
+  try {
+    const addResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=add-keyword&sourceType=excluded&keyword=Acme+Hiring',
+    });
+
+    assert.equal(addResponse.statusCode, 303);
+    assert.equal(
+      addResponse.headers.location,
+      '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member&keywordAction=added&keywordSourceType=excluded',
+    );
+
+    const disableResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=disable-keyword&targetKeywordId=expanded-review-2',
+    });
+
+    assert.equal(disableResponse.statusCode, 303);
+    assert.equal(
+      disableResponse.headers.location,
+      '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member&keywordAction=disabled&keywordSourceType=expanded',
+    );
+
+    const removeResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=remove-keyword&targetKeywordId=excluded-review-1',
+    });
+
+    assert.equal(removeResponse.statusCode, 303);
+    assert.equal(
+      removeResponse.headers.location,
+      '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member&keywordAction=removed&keywordSourceType=excluded',
+    );
+
+    const saveResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=save-review&decision=partial_match',
+    });
+
+    assert.equal(saveResponse.statusCode, 303);
+    assert.equal(
+      saveResponse.headers.location,
+      '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member&reviewSaved=partial_match',
+    );
+
+    const activateResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=activate',
+    });
+
+    assert.equal(activateResponse.statusCode, 303);
+    assert.equal(
+      activateResponse.headers.location,
+      '/workspaces/workspace-1/targets/target-review-1/review?userId=user-member&activated=1',
+    );
+
+    const collectorInput = getMonitoringTargetCollectorInput({
+      db,
+      workspaceId: 'workspace-1',
+      monitoringTargetId: 'target-review-1',
+    });
+    const savedTarget = db
+      .prepare(`
+        SELECT status
+        FROM monitoring_target
+        WHERE id = ?
+      `)
+      .get('target-review-1');
+
+    assert.deepEqual(collectorInput.expandedKeywords, [
+      {
+        id: 'expanded-review-1',
+        keyword: 'Acme Labs',
+        sourceType: 'expanded',
+        isActive: 1,
+        displayOrder: 0,
+      },
+    ]);
+    assert.deepEqual(collectorInput.excludedKeywords, [
+      {
+        id: 'excluded-review-2',
+        keyword: 'Acme Careers',
+        sourceType: 'excluded',
+        isActive: 1,
+        displayOrder: 0,
+      },
+      {
+        id: 'excluded-review-3',
+        keyword: 'Acme Hiring',
+        sourceType: 'excluded',
+        isActive: 1,
+        displayOrder: 1,
+      },
+    ]);
+    assert.deepEqual({ ...savedTarget }, {
+      status: 'active',
+    });
+
+    const activatedResponse = await request(server, {
+      path: activateResponse.headers.location,
+    });
+
+    assert.equal(activatedResponse.statusCode, 200);
+    assert.match(activatedResponse.body, /Target activated/u);
+    assert.match(activatedResponse.body, /Acme Careers/u);
+    assert.match(activatedResponse.body, /Acme Hiring/u);
+    assert.match(activatedResponse.body, /disabled/u);
   } finally {
     await closeServer(server);
     db.close();
@@ -769,6 +934,10 @@ test('target review activates an approved target from the review workflow', asyn
     assert.match(
       reviewResponse.body,
       /This monitoring target is already active\./u,
+    );
+    assert.match(
+      reviewResponse.body,
+      /Keyword editing is read-only in this workflow after activation\./u,
     );
   } finally {
     await closeServer(server);

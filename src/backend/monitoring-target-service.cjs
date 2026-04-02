@@ -432,6 +432,11 @@ function getMonitoringTargetReviewWorkflow({
     normalizedMonitoringTargetId,
     expandedTargetKeywordSourceType,
   ).map(normalizeTargetKeywordRow);
+  const excludedKeywords = listTargetKeywordsBySource(
+    db,
+    normalizedMonitoringTargetId,
+    excludedTargetKeywordSourceType,
+  ).map(normalizeTargetKeywordRow);
   const profile = getMonitoringTargetProfile(
     db,
     normalizedWorkspaceId,
@@ -452,7 +457,9 @@ function getMonitoringTargetReviewWorkflow({
     monitoringTarget.status === monitoringTargetAwaitingActivationStatus &&
     (reviewDecision === monitoringTargetMatchReviewDecision ||
       reviewDecision === monitoringTargetPartialMatchReviewDecision);
+  const canEditKeywords = monitoringTarget.status !== activeMonitoringTargetStatus;
   let activationBlockedReason = null;
+  let keywordEditBlockedReason = null;
 
   if (monitoringTarget.status === activeMonitoringTargetStatus) {
     activationBlockedReason = 'This monitoring target is already active.';
@@ -468,6 +475,11 @@ function getMonitoringTargetReviewWorkflow({
   } else if (!canActivate) {
     activationBlockedReason =
       `Activation is unavailable while the target is ${monitoringTarget.status}.`;
+  }
+
+  if (!canEditKeywords) {
+    keywordEditBlockedReason =
+      'Keyword editing is read-only in this workflow after activation.';
   }
 
   return {
@@ -491,6 +503,7 @@ function getMonitoringTargetReviewWorkflow({
       defaultRiskThreshold: monitoringTarget.default_risk_threshold,
       seedKeywords,
       expandedKeywords,
+      excludedKeywords,
     },
     profile: profile
       ? {
@@ -514,6 +527,10 @@ function getMonitoringTargetReviewWorkflow({
     reviewControls: {
       canSaveDecision: canSaveReviewDecision,
       availableDecisions: [...monitoringTargetReviewDecisions],
+    },
+    keywordEditor: {
+      canEdit: canEditKeywords,
+      blockedReason: keywordEditBlockedReason,
     },
     activation: {
       canActivate,

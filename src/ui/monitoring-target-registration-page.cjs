@@ -35,27 +35,6 @@ function renderTypeOptions(availableTargetTypes, selectedType) {
     .join('');
 }
 
-function renderOrderedKeywordList(keywords, emptyMessage) {
-  if (!keywords.length) {
-    return `<p class="muted-copy">${escapeHtml(emptyMessage)}</p>`;
-  }
-
-  return `
-    <ul class="seed-keyword-list">
-      ${keywords
-        .map(
-          (keyword) => `
-            <li>
-              <strong>${escapeHtml(keyword.keyword)}</strong>
-              <span>Order ${escapeHtml(keyword.displayOrder + 1)}</span>
-            </li>
-          `,
-        )
-        .join('')}
-    </ul>
-  `;
-}
-
 function renderTagList(items, emptyMessage) {
   if (!items.length) {
     return `<p class="muted-copy">${escapeHtml(emptyMessage)}</p>`;
@@ -128,6 +107,140 @@ function renderSearchResultGroups(searchResults) {
         )
         .join('')}
     </div>
+  `;
+}
+
+function getKeywordSourceLabel(sourceType) {
+  if (sourceType === 'seed') {
+    return 'Seed keywords';
+  }
+
+  if (sourceType === 'expanded') {
+    return 'Expanded keywords';
+  }
+
+  return 'Excluded keywords';
+}
+
+function getKeywordSourceDescription(sourceType) {
+  if (sourceType === 'seed') {
+    return 'The original operator-provided terms that establish subject scope.';
+  }
+
+  if (sourceType === 'expanded') {
+    return 'Generated or manually added discovery terms that broaden collection coverage.';
+  }
+
+  return 'Terms that should stay out of collection even if they share the same surface wording.';
+}
+
+function getKeywordEmptyMessage(sourceType) {
+  if (sourceType === 'seed') {
+    return 'No seed keywords were saved yet.';
+  }
+
+  if (sourceType === 'expanded') {
+    return 'No expanded keyword candidates are stored yet.';
+  }
+
+  return 'No excluded keywords are stored yet.';
+}
+
+function renderKeywordActionButton({
+  action,
+  label,
+  targetKeywordId,
+  disabled,
+}) {
+  return `
+    <form method="post" class="keyword-action-form">
+      <input type="hidden" name="action" value="${escapeHtml(action)}" />
+      <input type="hidden" name="targetKeywordId" value="${escapeHtml(targetKeywordId)}" />
+      <button type="submit"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button>
+    </form>
+  `;
+}
+
+function renderKeywordList({
+  sourceType,
+  keywords,
+  canEdit,
+}) {
+  if (!keywords.length) {
+    return `<p class="muted-copy">${escapeHtml(getKeywordEmptyMessage(sourceType))}</p>`;
+  }
+
+  return `
+    <ul class="keyword-editor-list">
+      ${keywords
+        .map((keyword) => {
+          const statusLabel = keyword.isActive ? 'active' : 'disabled';
+
+          return `
+            <li class="keyword-card${keyword.isActive ? '' : ' keyword-card-disabled'}">
+              <div class="keyword-card-copy">
+                <strong>${escapeHtml(keyword.keyword)}</strong>
+                <div class="keyword-meta">
+                  <span>Order ${escapeHtml(keyword.displayOrder + 1)}</span>
+                  <span class="status-pill">${escapeHtml(statusLabel)}</span>
+                </div>
+              </div>
+              <div class="keyword-card-actions">
+                ${keyword.isActive
+                  ? renderKeywordActionButton({
+                      action: 'disable-keyword',
+                      label: 'Disable',
+                      targetKeywordId: keyword.id,
+                      disabled: !canEdit,
+                    })
+                  : ''}
+                ${renderKeywordActionButton({
+                  action: 'remove-keyword',
+                  label: 'Remove',
+                  targetKeywordId: keyword.id,
+                  disabled: !canEdit,
+                })}
+              </div>
+            </li>
+          `;
+        })
+        .join('')}
+    </ul>
+  `;
+}
+
+function renderKeywordEditorSection(reviewWorkflow, sourceType, keywords) {
+  const canEdit = reviewWorkflow.keywordEditor.canEdit;
+  const inputId = `${sourceType}-keyword-input`;
+
+  return `
+    <section class="keyword-section">
+      <div class="keyword-section-header">
+        <h3>${escapeHtml(getKeywordSourceLabel(sourceType))}</h3>
+        <p class="muted-copy">${escapeHtml(getKeywordSourceDescription(sourceType))}</p>
+      </div>
+      ${renderKeywordList({
+        sourceType,
+        keywords,
+        canEdit,
+      })}
+      <form method="post" class="keyword-add-form">
+        <input type="hidden" name="action" value="add-keyword" />
+        <input type="hidden" name="sourceType" value="${escapeHtml(sourceType)}" />
+        <label for="${escapeHtml(inputId)}">Add ${escapeHtml(sourceType)} keyword</label>
+        <div class="keyword-inline-form">
+          <input
+            id="${escapeHtml(inputId)}"
+            name="keyword"
+            type="text"
+            autocomplete="off"
+            placeholder="Add a ${escapeHtml(sourceType)} keyword"
+            ${canEdit ? '' : 'disabled'}
+          />
+          <button type="submit"${canEdit ? '' : ' disabled'}>Add</button>
+        </div>
+      </form>
+    </section>
   `;
 }
 
@@ -450,9 +563,9 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         margin: 0;
       }
 
-      .seed-keyword-list,
       .tag-list,
-      .search-result-list {
+      .search-result-list,
+      .keyword-editor-list {
         list-style: none;
         padding: 0;
         margin: 0;
@@ -460,7 +573,6 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         gap: 0.7rem;
       }
 
-      .seed-keyword-list li,
       .search-result-list li {
         display: flex;
         justify-content: space-between;
@@ -516,6 +628,80 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
       .decision-status {
         display: grid;
         gap: 0.4rem;
+      }
+
+      .keyword-editor-grid {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .keyword-section {
+        display: grid;
+        gap: 0.9rem;
+        padding: 1rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.48);
+        border: 1px solid rgba(40, 78, 59, 0.12);
+      }
+
+      .keyword-section-header {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .keyword-card {
+        display: grid;
+        gap: 0.85rem;
+        padding: 0.95rem 1rem;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.68);
+        border: 1px solid rgba(40, 78, 59, 0.1);
+      }
+
+      .keyword-card-disabled {
+        opacity: 0.82;
+      }
+
+      .keyword-card-copy,
+      .keyword-card-actions,
+      .keyword-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        align-items: center;
+      }
+
+      .keyword-meta {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .keyword-card-actions {
+        justify-content: flex-start;
+      }
+
+      .keyword-action-form {
+        margin: 0;
+      }
+
+      .keyword-action-form button,
+      .keyword-add-form button {
+        padding-inline: 1rem;
+      }
+
+      .keyword-inline-form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+
+      .keyword-inline-form input {
+        flex: 1 1 220px;
+      }
+
+      .keyword-add-form {
+        display: grid;
+        gap: 0.6rem;
       }
 
       .search-groups {
@@ -579,32 +765,59 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
       (() => {
         const targetForm = document.querySelector('.target-form');
         const seedKeywordsField = document.getElementById('target-seed-keywords');
+        const keywordAddForms = document.querySelectorAll('.keyword-add-form');
 
-        if (!targetForm || !seedKeywordsField) {
-          return;
+        if (targetForm && seedKeywordsField) {
+          const validateSeedKeywords = () => {
+            const hasSeedKeyword = seedKeywordsField.value
+              .split(/\\r?\\n/u)
+              .some((keyword) => keyword.trim().length > 0);
+
+            seedKeywordsField.setCustomValidity(
+              hasSeedKeyword ? '' : 'Enter at least one seed keyword.',
+            );
+
+            return hasSeedKeyword;
+          };
+
+          seedKeywordsField.addEventListener('input', validateSeedKeywords);
+          targetForm.addEventListener('submit', (event) => {
+            if (validateSeedKeywords()) {
+              return;
+            }
+
+            event.preventDefault();
+            seedKeywordsField.reportValidity();
+          });
         }
 
-        const validateSeedKeywords = () => {
-          const hasSeedKeyword = seedKeywordsField.value
-            .split(/\\r?\\n/u)
-            .some((keyword) => keyword.trim().length > 0);
+        for (const keywordAddForm of keywordAddForms) {
+          const keywordField = keywordAddForm.querySelector('input[name="keyword"]');
 
-          seedKeywordsField.setCustomValidity(
-            hasSeedKeyword ? '' : 'Enter at least one seed keyword.',
-          );
-
-          return hasSeedKeyword;
-        };
-
-        seedKeywordsField.addEventListener('input', validateSeedKeywords);
-        targetForm.addEventListener('submit', (event) => {
-          if (validateSeedKeywords()) {
-            return;
+          if (!keywordField) {
+            continue;
           }
 
-          event.preventDefault();
-          seedKeywordsField.reportValidity();
-        });
+          const validateKeyword = () => {
+            const hasKeyword = keywordField.value.trim().length > 0;
+
+            keywordField.setCustomValidity(
+              hasKeyword ? '' : 'Enter a keyword before saving.',
+            );
+
+            return hasKeyword;
+          };
+
+          keywordField.addEventListener('input', validateKeyword);
+          keywordAddForm.addEventListener('submit', (event) => {
+            if (validateKeyword()) {
+              return;
+            }
+
+            event.preventDefault();
+            keywordField.reportValidity();
+          });
+        }
       })();
     </script>
   </body>
@@ -850,19 +1063,21 @@ function renderMonitoringTargetReviewPage({
           </section>
           <section class="panel">
             <div class="panel-intro">
-              <h2>Keyword candidates</h2>
-              <p class="muted-copy">Seed keywords define the original scope. Expanded keywords are the candidate terms discovery generated for operator review.</p>
+              <h2>Keyword editor</h2>
+              <p class="muted-copy">
+                Edits save immediately on this review route. Only active seed, expanded, and excluded keywords will feed the collector once the target is activated.
+              </p>
             </div>
-            <div class="support-grid">
-              <div>
-                <h3>Seed keywords</h3>
-                ${renderOrderedKeywordList(target.seedKeywords, 'No seed keywords were saved.')}
-              </div>
-              <div>
-                <h3>Expanded keywords</h3>
-                ${renderOrderedKeywordList(target.expandedKeywords, 'No expanded keyword candidates were generated yet.')}
-              </div>
+            <div class="keyword-editor-grid">
+              ${renderKeywordEditorSection(reviewWorkflow, 'seed', target.seedKeywords)}
+              ${renderKeywordEditorSection(reviewWorkflow, 'expanded', target.expandedKeywords)}
+              ${renderKeywordEditorSection(reviewWorkflow, 'excluded', target.excludedKeywords)}
             </div>
+            ${reviewWorkflow.keywordEditor.canEdit
+              ? ''
+              : `
+                  <p class="muted-copy">${escapeHtml(reviewWorkflow.keywordEditor.blockedReason ?? 'Keyword editing is unavailable.')}</p>
+                `}
           </section>
           <section class="panel">
             <div class="panel-intro">

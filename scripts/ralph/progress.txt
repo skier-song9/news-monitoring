@@ -29,6 +29,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For lightweight UI stories in this repo, keep SQL and auth checks in the existing service module, render HTML in a small `src/ui/*.cjs` view, and wrap both with a dependency-free `node:http` route so `node:test` and browser demos exercise the same surface.
 - For newline-delimited form inputs like seed keywords, trim lines on both the server parser and a small `setCustomValidity` browser guard so whitespace-only submissions are blocked before POST and still rejected on direct requests.
 - For dependency-free `node:http` workflow screens, keep POST actions redirecting back to GET with query-param flash state, and derive button enabled/disabled state from backend workflow payloads so the UI cannot drift from lifecycle rules.
+- For pre-activation editing inside server-rendered review flows, keep keyword mutation actions on the existing target-specific review route, gate direct POST writes with the same workflow `canEdit` state used by the page, and use redirect query params for success flashes so GET stays canonical.
 - When review surfaces show third-party evidence links, validate stored URLs as absolute `http`/`https` during ingestion and still sanitize anchors at render time so legacy rows cannot become scriptable links.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
@@ -254,4 +255,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: server-rendered lifecycle screens work best here when the backend returns explicit `canSaveDecision` and `canActivate` flags plus blocked-reason strings, so button state and direct POST behavior stay aligned.
   - Gotchas encountered: validating third-party evidence only on input is not enough because legacy rows can still exist; the renderer must treat unsafe URLs as inert text even after ingestion-side validation is added.
   - Useful context: browser verification used `npm run target-registration-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/targets/target-review-demo-1/review?userId=user-owner`; saving `partial_match` moved the target to `awaiting_activation`, activating it moved the target to `active`, and `npm run check` passed with 115 passing tests after the follow-up security and rollback fixes.
+---
+## 2026-04-02 12:43:53 KST - US-026
+- Implemented a server-rendered keyword editor inside the monitoring target review flow, with separate seed, expanded, and excluded sections plus add, disable, and remove actions wired through the existing review route.
+- Added lifecycle-aware keyword editing feedback so success flashes, active-state read-only messaging, and direct POST gating all stay aligned with the review workflow, then covered the end-to-end edits through activation in route tests and browser verification.
+- Files changed: `src/backend/monitoring-target-service.cjs`, `src/http/monitoring-target-registration-app.cjs`, `src/ui/monitoring-target-registration-page.cjs`, `tests/monitoring-target-registration-app.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: keyword-management actions fit this repo best as small POST forms on the existing review page, with redirect-based flash params and workflow-derived `canEdit` state instead of a separate API surface.
+  - Gotchas encountered: backend keyword services still allow updates for active targets, so this review-route UI must enforce its own post-activation read-only rule before calling add/disable/remove actions.
+  - Useful context: browser verification used `npm run target-registration-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/targets/target-review-demo-1/review?userId=user-owner`; adding an excluded keyword, disabling `Jane Doe`, removing the excluded keyword, saving `partial_match`, and activating the target all worked, and a screenshot was captured at `us-026-keyword-editor-review.png`.
 ---
