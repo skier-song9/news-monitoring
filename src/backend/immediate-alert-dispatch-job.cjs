@@ -496,7 +496,7 @@ async function dispatchChannelAlert({
       destination,
       finalStatus: 'sent',
       failureReason: null,
-      attemptedAt: dispatchResult.sentAt,
+      attemptedAt,
       deliveredAt: dispatchResult.sentAt,
       payloadReference: dispatchResult.payloadReference,
       sentAt: dispatchResult.sentAt,

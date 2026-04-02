@@ -345,17 +345,21 @@ async function runPortalSearchCollector({
         monitoringTargetId: monitoringTarget.id,
       }),
     );
-    const portals = [];
+    const portalSearchResults = await Promise.all(
+      PORTAL_SEARCH_CONFIGS.map(async ({ portalName }) => {
+        const searchFunction = searchFunctionsByPortal.get(portalName);
+        const results = normalizePortalSearchResults(
+          portalName,
+          await searchFunction({
+            monitoringTarget,
+            collectorInput,
+          }),
+        );
+        return { portalName, results };
+      }),
+    );
 
-    for (const { portalName } of PORTAL_SEARCH_CONFIGS) {
-      const searchFunction = searchFunctionsByPortal.get(portalName);
-      const results = normalizePortalSearchResults(
-        portalName,
-        await searchFunction({
-          monitoringTarget,
-          collectorInput,
-        }),
-      );
+    const portals = portalSearchResults.map(({ portalName, results }) => {
       const candidates = persistPortalSearchResults({
         db,
         workspaceId: monitoringTarget.workspaceId,
@@ -365,12 +369,8 @@ async function runPortalSearchCollector({
         now,
         createId,
       });
-
-      portals.push({
-        portalName,
-        candidates,
-      });
-    }
+      return { portalName, candidates };
+    });
 
     processedTargets.push({
       workspaceId: monitoringTarget.workspaceId,

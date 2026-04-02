@@ -219,7 +219,8 @@ function createWorkspaceMembersApp({
 
   return (request, response) => {
     handleRequest(request, response).catch((error) => {
-      sendText(response, 500, error.message);
+      console.error(error);
+      sendText(response, 500, 'Internal server error');
     });
   };
 }

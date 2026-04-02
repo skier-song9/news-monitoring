@@ -627,7 +627,7 @@ test('runOneMinuteAlertBatchingJob groups one-minute high-risk events by workspa
       destination: '["desk@example.com"]',
       final_status: 'sent',
       failure_reason: null,
-      attempted_at: '2026-03-30T21:02:02.500Z',
+      attempted_at: '2026-03-30T21:02:02.000Z',
       delivered_at: '2026-03-30T21:02:02.500Z',
     },
     {
@@ -636,7 +636,7 @@ test('runOneMinuteAlertBatchingJob groups one-minute high-risk events by workspa
       destination: 'https://hooks.slack.com/services/T000/B000/SLACK1',
       final_status: 'sent',
       failure_reason: null,
-      attempted_at: '2026-03-30T21:02:01.500Z',
+      attempted_at: '2026-03-30T21:02:01.000Z',
       delivered_at: '2026-03-30T21:02:01.500Z',
     },
   ]);

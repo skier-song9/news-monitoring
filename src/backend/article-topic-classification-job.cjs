@@ -116,7 +116,8 @@ function listClassifiableArticles(db) {
              ac.publisher_name,
              ac.published_at,
              ac.view_count,
-             ac.fetched_at
+             ac.fetched_at,
+             aa.topics_classified_at
       FROM article_candidate c
       JOIN monitoring_target t
         ON t.workspace_id = c.workspace_id
@@ -127,11 +128,19 @@ function listClassifiableArticles(db) {
       JOIN article_content ac
         ON ac.workspace_id = c.workspace_id
        AND ac.article_id = c.article_id
+      LEFT JOIN article_analysis aa
+        ON aa.workspace_id = c.workspace_id
+       AND aa.monitoring_target_id = c.monitoring_target_id
+       AND aa.article_id = c.article_id
       WHERE c.article_id IS NOT NULL
         AND a.ingestion_status = ?
       ORDER BY c.workspace_id, c.monitoring_target_id, c.article_id
     `)
     .all(completedArticleIngestionStatus);
+}
+
+function shouldClassifyTopics(row) {
+  return row.topics_classified_at == null;
 }
 
 function normalizeMonitoringTargetRow(row) {
@@ -260,6 +269,10 @@ async function runArticleTopicClassificationJob({
   const processedAnalyses = [];
 
   for (const row of listClassifiableArticles(db)) {
+    if (!shouldClassifyTopics(row)) {
+      continue;
+    }
+
     const monitoringTarget = normalizeMonitoringTargetRow(row);
     const article = normalizeArticleRow(row);
     const classificationResult = normalizeClassificationResult(

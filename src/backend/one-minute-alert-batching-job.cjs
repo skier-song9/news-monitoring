@@ -257,10 +257,10 @@ function listEligibleBatchSourceRows(db) {
        AND bi.alert_event_id = e.id
       WHERE e.risk_band = ?
         AND bi.alert_event_id IS NULL
+        AND e.status IN ('delivered', 'partially_delivered', 'failed', 'suppressed')
       ORDER BY e.workspace_id, e.monitoring_target_id, e.triggered_at, e.risk_score DESC, e.id
     `)
-    .all(highArticleAnalysisRiskBand)
-    .filter((row) => FINALIZED_ALERT_EVENT_STATUSES.has(row.alert_event_status));
+    .all(highArticleAnalysisRiskBand);
 }
 
 function normalizeBatchSourceRow(row) {
@@ -582,7 +582,7 @@ async function dispatchChannelBatchAlert({
       destination,
       finalStatus: 'sent',
       failureReason: null,
-      attemptedAt: dispatchResult.sentAt,
+      attemptedAt,
       deliveredAt: dispatchResult.sentAt,
       payloadReference: dispatchResult.payloadReference,
       sentAt: dispatchResult.sentAt,

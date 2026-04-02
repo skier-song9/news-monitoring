@@ -53,6 +53,10 @@ function getArticleAnalysisRiskBand(riskScore) {
     ({ minimumScore, maximumScore }) => riskScore >= minimumScore && riskScore <= maximumScore,
   );
 
+  if (!matchingRange) {
+    throw new RangeError(`No risk band found for riskScore: ${riskScore}`);
+  }
+
   return matchingRange.band;
 }
 
