@@ -674,6 +674,7 @@ seedReviewDemoTarget(db, workspace.id)
       process.stdout.write(`Review demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/${target.id}/review?userId=user-owner\n`);
       process.stdout.write(`Alert settings demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/alerts?userId=user-owner\n`);
       process.stdout.write(`Article dashboard demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/articles?userId=user-owner\n`);
+      process.stdout.write(`Analytics dashboard demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/analytics?userId=user-owner\n`);
 
       function closeServer() {
         clearInterval(liveTicker);

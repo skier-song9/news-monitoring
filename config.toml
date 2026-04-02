@@ -1,0 +1,14 @@
+[mcp_servers.shrimp-task-manager]
+command = "node"
+args = ["~/mcp-shrimp-task-manager/dist/index.js"]
+env = {
+  "DATA_DIR": "~/Documents/projects/news-monitoring/shrimp_data",
+  "TEMPLATES_USE": "en",
+  "ENABLE_GUI": "false"
+}
+enabled = true
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest"]
+

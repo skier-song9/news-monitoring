@@ -267,6 +267,16 @@ function renderPublisherSuggestions(dashboardPage) {
     .join('');
 }
 
+function renderReporterSuggestions(dashboardPage) {
+  return dashboardPage.filters.options.reporters
+    .map(
+      (reporterName) => `
+        <option value="${escapeHtml(reporterName)}"></option>
+      `,
+    )
+    .join('');
+}
+
 function toSafeExternalHref(value) {
   if (typeof value !== 'string' || !value) {
     return null;
@@ -1111,6 +1121,16 @@ function renderArticleDashboardPage({ dashboardPage, clearFiltersHref }) {
               />
             </label>
             <label>
+              Reporter
+              <input
+                type="text"
+                name="reporter"
+                list="article-dashboard-reporter-list"
+                value="${escapeHtml(dashboardPage.filters.values.reporter)}"
+                placeholder="Any reporter"
+              />
+            </label>
+            <label>
               Published from
               <input
                 type="date"
@@ -1129,6 +1149,9 @@ function renderArticleDashboardPage({ dashboardPage, clearFiltersHref }) {
           </div>
           <datalist id="article-dashboard-publisher-list">
             ${renderPublisherSuggestions(dashboardPage)}
+          </datalist>
+          <datalist id="article-dashboard-reporter-list">
+            ${renderReporterSuggestions(dashboardPage)}
           </datalist>
           <div class="filter-actions">
             <p class="muted-copy">Live refresh keeps the visible result slice current; filters stay untouched.</p>

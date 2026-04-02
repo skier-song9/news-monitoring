@@ -132,6 +132,16 @@ function normalizePublisher(value) {
   return normalizedValue.toLowerCase();
 }
 
+function normalizeReporter(value) {
+  const normalizedValue = normalizeOptionalString(value, 'reporter');
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return normalizedValue.toLowerCase();
+}
+
 function normalizeDateInputValue(value) {
   if (typeof value !== 'string' || !value) {
     return '';
@@ -239,6 +249,26 @@ function listPublisherOptions(db, workspaceId) {
     .map((row) => row.publisher_name);
 }
 
+function listReporterOptions(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT
+        LOWER(TRIM(article_content.author_name)) AS normalized_author_name,
+        MIN(TRIM(article_content.author_name)) AS author_name
+      FROM article_content
+      INNER JOIN article_analysis
+        ON article_analysis.workspace_id = article_content.workspace_id
+       AND article_analysis.article_id = article_content.article_id
+      WHERE article_content.workspace_id = ?
+        AND article_content.author_name IS NOT NULL
+        AND TRIM(article_content.author_name) <> ''
+      GROUP BY LOWER(TRIM(article_content.author_name))
+      ORDER BY normalized_author_name, author_name
+    `)
+    .all(workspaceId)
+    .map((row) => row.author_name);
+}
+
 function parseTopicLabels(value) {
   if (typeof value !== 'string') {
     return [];
@@ -327,6 +357,7 @@ function normalizeArticleFeedFilters(options) {
     riskBand: normalizeRiskBand(options.riskBand),
     topicLabel: normalizeOptionalString(options.topicLabel, 'topicLabel'),
     publisher: normalizePublisher(options.publisher),
+    reporter: normalizeReporter(options.reporter),
     publishedFrom: normalizeTimestamp(options.publishedFrom, 'publishedFrom'),
     publishedTo: normalizeTimestamp(options.publishedTo, 'publishedTo'),
     sort: normalizeSort(options.sort),
@@ -376,6 +407,11 @@ function queryArticleFeedRows(db, filters) {
   if (filters.publisher) {
     whereClauses.push('LOWER(TRIM(article_content.publisher_name)) = ?');
     queryParameters.push(filters.publisher);
+  }
+
+  if (filters.reporter) {
+    whereClauses.push('LOWER(TRIM(article_content.author_name)) = ?');
+    queryParameters.push(filters.reporter);
   }
 
   if (filters.publishedFrom) {
@@ -465,6 +501,7 @@ function getArticleDashboardPage(options) {
         riskBand: normalizedFilters.riskBand ?? '',
         topicLabel: normalizedFilters.topicLabel ?? '',
         publisher: options.publisher == null ? '' : String(options.publisher).trim(),
+        reporter: options.reporter == null ? '' : String(options.reporter).trim(),
         publishedFrom: normalizeDateInputValue(options.publishedFrom),
         publishedTo: normalizeDateInputValue(options.publishedTo),
         sort: normalizedFilters.sort,
@@ -477,6 +514,7 @@ function getArticleDashboardPage(options) {
         })),
         topics: listTopicOptions(options.db, normalizedFilters.workspaceId),
         publishers: listPublisherOptions(options.db, normalizedFilters.workspaceId),
+        reporters: listReporterOptions(options.db, normalizedFilters.workspaceId),
         sorts: articleDashboardSortOptions.map((sortOption) => ({ ...sortOption })),
       },
     },

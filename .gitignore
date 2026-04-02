@@ -49,3 +49,9 @@ scripts/ralph/.last-run
 
 # Agents
 .agents/
+.codex/
+.claude/
+.playwright-mcp/
+.playwright_mcp/
+.omx/
+

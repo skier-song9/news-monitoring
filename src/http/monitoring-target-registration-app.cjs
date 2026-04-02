@@ -9,6 +9,10 @@ const {
   saveWorkspaceAlertPolicy,
 } = require('../backend/alert-policy-service.cjs');
 const {
+  ArticleAnalyticsQueryServiceError,
+  getArticleAnalyticsDashboardPage,
+} = require('../backend/article-analytics-query-service.cjs');
+const {
   ArticleDetailQueryServiceError,
   getArticleDetail,
 } = require('../backend/article-detail-query-service.cjs');
@@ -32,6 +36,9 @@ const {
   renderMonitoringTargetRegistrationPage,
   renderMonitoringTargetReviewPage,
 } = require('../ui/monitoring-target-registration-page.cjs');
+const {
+  renderArticleAnalyticsPage,
+} = require('../ui/article-analytics-page.cjs');
 const {
   renderArticleDetailPage,
   renderArticleDashboardPage,
@@ -76,6 +83,10 @@ function getReviewRouteMatch(pathname) {
 
 function getAlertSettingsRouteMatch(pathname) {
   return pathname.match(/^\/workspaces\/([^/]+)\/alerts\/?$/u);
+}
+
+function getArticleAnalyticsRouteMatch(pathname) {
+  return pathname.match(/^\/workspaces\/([^/]+)\/analytics\/?$/u);
 }
 
 function getArticleDashboardRouteMatch(pathname) {
@@ -541,6 +552,14 @@ function buildArticleDashboardLocation(requestUrl, workspaceId, state = {}) {
   );
 }
 
+function buildArticleAnalyticsLocation(requestUrl, workspaceId, state = {}) {
+  return buildArticleLocationWithState(
+    requestUrl,
+    `/workspaces/${encodeURIComponent(workspaceId)}/analytics`,
+    state,
+  );
+}
+
 function buildArticleLocationWithState(requestUrl, pathname, state = {}) {
   const nextParams = new URLSearchParams();
   const userId = requestUrl.searchParams.get('userId');
@@ -574,10 +593,25 @@ function getArticleDashboardFilterState(requestUrl) {
     'riskBand',
     'topicLabel',
     'publisher',
+    'reporter',
     'publishedFrom',
     'publishedTo',
     'sort',
   ]) {
+    const value = requestUrl.searchParams.get(key);
+
+    if (value != null) {
+      filterState[key] = value;
+    }
+  }
+
+  return filterState;
+}
+
+function getArticleAnalyticsFilterState(requestUrl) {
+  const filterState = {};
+
+  for (const key of ['monitoringTargetId', 'publishedFrom', 'publishedTo']) {
     const value = requestUrl.searchParams.get(key);
 
     if (value != null) {
@@ -594,6 +628,19 @@ function buildArticleDetailLocation(requestUrl, workspaceId, articleAnalysisId, 
     `/workspaces/${encodeURIComponent(workspaceId)}/articles/${encodeURIComponent(articleAnalysisId)}`,
     state,
   );
+}
+
+function buildAnalyticsDrilldownState(filterState, dimensionKey, dimensionValue) {
+  return {
+    monitoringTargetId: filterState.monitoringTargetId ?? null,
+    publishedFrom: filterState.publishedFrom ?? null,
+    publishedTo: filterState.publishedTo ?? null,
+    riskBand: 'high',
+    sort: 'highest_risk',
+    topicLabel: dimensionKey === 'topicLabel' ? dimensionValue : null,
+    publisher: dimensionKey === 'publisher' ? dimensionValue : null,
+    reporter: dimensionKey === 'reporter' ? dimensionValue : null,
+  };
 }
 
 function getErrorStatusCode(error) {
@@ -621,6 +668,18 @@ function getArticleFeedErrorStatusCode(error) {
 
 function getArticleDetailErrorStatusCode(error) {
   if (error.code === 'ARTICLE_DETAIL_NOT_FOUND') {
+    return 404;
+  }
+
+  if (error.code === 'INVALID_INPUT') {
+    return 400;
+  }
+
+  return 403;
+}
+
+function getArticleAnalyticsErrorStatusCode(error) {
+  if (error.code === 'WORKSPACE_NOT_FOUND') {
     return 404;
   }
 
@@ -815,6 +874,7 @@ function createMonitoringTargetRegistrationApp({
             riskBand: requestUrl.searchParams.get('riskBand'),
             topicLabel: requestUrl.searchParams.get('topicLabel'),
             publisher: requestUrl.searchParams.get('publisher'),
+            reporter: requestUrl.searchParams.get('reporter'),
             publishedFrom: requestUrl.searchParams.get('publishedFrom'),
             publishedTo: requestUrl.searchParams.get('publishedTo'),
             sort: requestUrl.searchParams.get('sort'),
@@ -855,6 +915,89 @@ function createMonitoringTargetRegistrationApp({
         } catch (error) {
           if (error instanceof ArticleFeedQueryServiceError) {
             sendText(response, getArticleFeedErrorStatusCode(error), error.message);
+            return;
+          }
+
+          throw error;
+        }
+
+        return;
+      }
+
+      sendText(response, 405, 'Method not allowed');
+      return;
+    }
+
+    const articleAnalyticsRouteMatch = getArticleAnalyticsRouteMatch(requestUrl.pathname);
+
+    if (articleAnalyticsRouteMatch) {
+      const workspaceId = decodeURIComponent(articleAnalyticsRouteMatch[1]);
+
+      if (request.method === 'GET') {
+        try {
+          const analyticsPage = getArticleAnalyticsDashboardPage({
+            db,
+            workspaceId,
+            userId,
+            monitoringTargetId: requestUrl.searchParams.get('monitoringTargetId'),
+            publishedFrom: requestUrl.searchParams.get('publishedFrom'),
+            publishedTo: requestUrl.searchParams.get('publishedTo'),
+          });
+          const analyticsFilterState = getArticleAnalyticsFilterState(requestUrl);
+          const analyticsPageForRender = {
+            ...analyticsPage,
+            analytics: {
+              topicSummaries: analyticsPage.analytics.topicSummaries.map((summary) => ({
+                ...summary,
+                drilldownHref: buildArticleDashboardLocation(
+                  requestUrl,
+                  workspaceId,
+                  buildAnalyticsDrilldownState(
+                    analyticsFilterState,
+                    'topicLabel',
+                    summary.topicLabel,
+                  ),
+                ),
+              })),
+              publisherSummaries: analyticsPage.analytics.publisherSummaries.map((summary) => ({
+                ...summary,
+                drilldownHref: buildArticleDashboardLocation(
+                  requestUrl,
+                  workspaceId,
+                  buildAnalyticsDrilldownState(
+                    analyticsFilterState,
+                    'publisher',
+                    summary.publisherName,
+                  ),
+                ),
+              })),
+              reporterSummaries: analyticsPage.analytics.reporterSummaries.map((summary) => ({
+                ...summary,
+                drilldownHref: buildArticleDashboardLocation(
+                  requestUrl,
+                  workspaceId,
+                  buildAnalyticsDrilldownState(
+                    analyticsFilterState,
+                    'reporter',
+                    summary.reporterName,
+                  ),
+                ),
+              })),
+            },
+          };
+
+          sendHtml(
+            response,
+            200,
+            renderArticleAnalyticsPage({
+              analyticsPage: analyticsPageForRender,
+              clearFiltersHref: buildArticleAnalyticsLocation(requestUrl, workspaceId),
+              articleDashboardHref: buildArticleDashboardLocation(requestUrl, workspaceId),
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ArticleAnalyticsQueryServiceError) {
+            sendText(response, getArticleAnalyticsErrorStatusCode(error), error.message);
             return;
           }
 

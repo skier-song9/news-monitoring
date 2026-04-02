@@ -522,6 +522,25 @@ test('listArticleFeed accepts date-only dashboard filter values', () => {
   db.close();
 });
 
+test('listArticleFeed supports reporter drilldown filters', () => {
+  const db = createDatabase();
+  seedWorkspaceFixture(db);
+
+  const filteredArticles = listArticleFeed({
+    db,
+    workspaceId: 'workspace-1',
+    userId: 'user-member',
+    reporter: ' reporter one ',
+  });
+
+  assert.deepEqual(
+    filteredArticles.map((article) => article.articleAnalysisId),
+    ['analysis-1'],
+  );
+
+  db.close();
+});
+
 test('getArticleDashboardPage returns workspace context and filter options for the live UI', () => {
   const db = createDatabase();
   seedWorkspaceFixture(db);
@@ -534,6 +553,7 @@ test('getArticleDashboardPage returns workspace context and filter options for t
     riskBand: 'high',
     topicLabel: 'governance',
     publisher: ' Financial Post ',
+    reporter: ' Reporter One ',
     publishedFrom: '2026-03-30',
     publishedTo: '2026-03-30',
     sort: 'newest',
@@ -549,6 +569,7 @@ test('getArticleDashboardPage returns workspace context and filter options for t
   assert.equal(dashboardPage.filters.values.riskBand, 'high');
   assert.equal(dashboardPage.filters.values.topicLabel, 'governance');
   assert.equal(dashboardPage.filters.values.publisher, 'Financial Post');
+  assert.equal(dashboardPage.filters.values.reporter, 'Reporter One');
   assert.equal(dashboardPage.filters.values.publishedFrom, '2026-03-30');
   assert.equal(dashboardPage.filters.values.publishedTo, '2026-03-30');
   assert.equal(dashboardPage.filters.values.sort, 'newest');
@@ -570,6 +591,12 @@ test('getArticleDashboardPage returns workspace context and filter options for t
     'Daily Ledger',
     'Financial Post',
     'Metro News',
+  ]);
+  assert.deepEqual(dashboardPage.filters.options.reporters, [
+    'Reporter Four',
+    'Reporter One',
+    'Reporter Three',
+    'Reporter Two',
   ]);
   assert.equal(dashboardPage.articles.length, 1);
   assert.equal(dashboardPage.articles[0].articleAnalysisId, 'analysis-1');

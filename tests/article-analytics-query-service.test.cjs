@@ -8,6 +8,7 @@ const { applyMigrations } = require('../src/db/migrations.cjs');
 const {
   ArticleAnalyticsQueryServiceError,
   getArticleAnalyticsAggregates,
+  getArticleAnalyticsDashboardPage,
 } = require('../src/backend/article-analytics-query-service.cjs');
 const { completedArticleIngestionStatus } = require('../src/db/schema/article-ingestion.cjs');
 
@@ -619,6 +620,56 @@ test('getArticleAnalyticsAggregates rejects callers outside the workspace and in
       error.code === 'INVALID_INPUT' &&
       error.message === 'publishedFrom must be earlier than or equal to publishedTo',
   );
+
+  db.close();
+});
+
+test('getArticleAnalyticsDashboardPage returns workspace context, filter state, and date-only analytics summaries', () => {
+  const db = createDatabase();
+  seedWorkspaceFixture(db);
+
+  const analyticsPage = getArticleAnalyticsDashboardPage({
+    db,
+    workspaceId: 'workspace-1',
+    userId: 'user-member',
+    monitoringTargetId: 'target-acme',
+    publishedFrom: '2026-03-30',
+    publishedTo: '2026-03-31',
+  });
+
+  assert.deepEqual(analyticsPage.workspace, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  assert.equal(analyticsPage.viewer.userId, 'user-member');
+  assert.equal(analyticsPage.filters.values.monitoringTargetId, 'target-acme');
+  assert.equal(analyticsPage.filters.values.publishedFrom, '2026-03-30');
+  assert.equal(analyticsPage.filters.values.publishedTo, '2026-03-31');
+  assert.deepEqual(
+    analyticsPage.filters.options.monitoringTargets.map((target) => target.id),
+    ['target-acme', 'target-ceo'],
+  );
+  assert.deepEqual(analyticsPage.analytics.topicSummaries, [
+    {
+      topicLabel: 'legal',
+      highRiskArticleCount: 2,
+      articleIds: ['article-1', 'article-2'],
+      articleAnalysisIds: ['analysis-1', 'analysis-2'],
+    },
+    {
+      topicLabel: 'governance',
+      highRiskArticleCount: 1,
+      articleIds: ['article-1'],
+      articleAnalysisIds: ['analysis-1'],
+    },
+    {
+      topicLabel: 'operations',
+      highRiskArticleCount: 1,
+      articleIds: ['article-2'],
+      articleAnalysisIds: ['analysis-2'],
+    },
+  ]);
 
   db.close();
 });

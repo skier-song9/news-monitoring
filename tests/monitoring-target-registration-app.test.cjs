@@ -1553,6 +1553,7 @@ test('article dashboard page renders live feed cards, filters, and polling scrip
     assert.match(response.body, /name="riskBand"/u);
     assert.match(response.body, /name="topicLabel"/u);
     assert.match(response.body, /name="publisher"/u);
+    assert.match(response.body, /name="reporter"/u);
     assert.match(response.body, /name="publishedFrom"/u);
     assert.match(response.body, /name="publishedTo"/u);
     assert.match(response.body, /value="highest_risk"/u);
@@ -1570,6 +1571,42 @@ test('article dashboard page renders live feed cards, filters, and polling scrip
     assert.match(response.body, /data-live-results/u);
     assert.match(response.body, /window\.__articleDashboardRefreshCount/u);
     assert.match(response.body, /polls the server without reloading the page/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('analytics dashboard page renders summary lanes and drilldown links for active workspace members', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedArticleDashboardData(db);
+  const server = await startServer(db);
+
+  try {
+    const response = await request(server, {
+      path: '/workspaces/workspace-1/analytics?userId=user-member',
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(
+      response.body,
+      /See which targets, publishers, and reporters keep resurfacing in high-risk coverage\./u,
+    );
+    assert.match(response.body, /name="monitoringTargetId"/u);
+    assert.match(response.body, /name="publishedFrom"/u);
+    assert.match(response.body, /name="publishedTo"/u);
+    assert.match(response.body, /Topic spikes/u);
+    assert.match(response.body, /Publisher concentration/u);
+    assert.match(response.body, /Reporter watchlist/u);
+    assert.match(response.body, /governance/u);
+    assert.match(response.body, /Financial Dispatch/u);
+    assert.match(response.body, /Naomi Park/u);
+    assert.match(
+      response.body,
+      /href="\/workspaces\/workspace-1\/articles\?userId=user-member&amp;riskBand=high&amp;sort=highest_risk&amp;topicLabel=governance"/u,
+    );
+    assert.match(response.body, /Open live article feed/u);
   } finally {
     await closeServer(server);
     db.close();
@@ -1611,6 +1648,47 @@ test('article detail page is reachable from the dashboard and renders rationale,
     assert.match(response.body, /Relevance scored/u);
     assert.match(response.body, /Summary generated/u);
     assert.match(response.body, /Risk scored/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('analytics dashboard filters persist into reporter drilldowns', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedArticleDashboardData(db);
+  const server = await startServer(db);
+
+  try {
+    const analyticsPage = await request(server, {
+      path: '/workspaces/workspace-1/analytics?userId=user-member&monitoringTargetId=target-dashboard-acme&publishedFrom=2026-04-02&publishedTo=2026-04-02',
+    });
+
+    assert.equal(analyticsPage.statusCode, 200);
+    assert.match(analyticsPage.body, /<option value="target-dashboard-acme" selected>/u);
+    assert.match(analyticsPage.body, /value="2026-04-02"/u);
+    assert.match(
+      analyticsPage.body,
+      /href="\/workspaces\/workspace-1\/articles\?userId=user-member&amp;monitoringTargetId=target-dashboard-acme&amp;publishedFrom=2026-04-02&amp;publishedTo=2026-04-02&amp;riskBand=high&amp;sort=highest_risk&amp;reporter=Naomi\+Park"/u,
+    );
+
+    const drilldownPage = await request(server, {
+      path: '/workspaces/workspace-1/articles?userId=user-member&monitoringTargetId=target-dashboard-acme&publishedFrom=2026-04-02&publishedTo=2026-04-02&riskBand=high&sort=highest_risk&reporter=Naomi+Park',
+    });
+
+    assert.equal(drilldownPage.statusCode, 200);
+    assert.match(
+      drilldownPage.body,
+      /Acme faces governance investigation after whistleblower filing/u,
+    );
+    assert.doesNotMatch(drilldownPage.body, /Acme expands recall to a second product line/u);
+    assert.doesNotMatch(
+      drilldownPage.body,
+      /Jane Doe outlines a cautious hiring plan in town hall remarks/u,
+    );
+    assert.match(drilldownPage.body, /name="reporter"/u);
+    assert.match(drilldownPage.body, /value="Naomi Park"/u);
   } finally {
     await closeServer(server);
     db.close();
