@@ -10,6 +10,7 @@ const {
   acceptInvitation,
   createWorkspace,
   inviteTeammate,
+  listWorkspaceMembersDirectory,
 } = require('../src/backend/workspace-service.cjs');
 
 function createDatabase() {
@@ -322,6 +323,170 @@ test('acceptInvitation rejects users whose email does not match the invitation r
     (error) => {
       assert.ok(error instanceof WorkspaceServiceError);
       assert.equal(error.code, 'WORKSPACE_INVITATION_EMAIL_MISMATCH');
+      return true;
+    },
+  );
+
+  db.close();
+});
+
+test('listWorkspaceMembersDirectory returns ordered members, pending invitations, and viewer permissions', () => {
+  const db = createDatabase();
+
+  insertUser(db, {
+    id: 'user-owner',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertUser(db, {
+    id: 'user-admin',
+    email: 'admin@example.com',
+    displayName: 'Admin',
+  });
+  insertUser(db, {
+    id: 'user-member',
+    email: 'member@example.com',
+    displayName: 'Member',
+  });
+
+  createWorkspace({
+    db,
+    ownerUserId: 'user-owner',
+    workspaceName: 'Acme Risk Desk',
+    workspaceSlug: 'acme-risk',
+    createId: createIdGenerator('workspace-1', 'membership-owner'),
+  });
+
+  insertMembership(db, {
+    id: 'membership-admin',
+    workspaceId: 'workspace-1',
+    userId: 'user-admin',
+    role: 'admin',
+  });
+  insertMembership(db, {
+    id: 'membership-member',
+    workspaceId: 'workspace-1',
+    userId: 'user-member',
+    role: 'member',
+  });
+
+  inviteTeammate({
+    db,
+    workspaceId: 'workspace-1',
+    invitedByUserId: 'user-owner',
+    email: 'pending@example.com',
+    role: 'member',
+    expiresAt: '2026-04-06T12:00:00.000Z',
+    now: () => '2026-03-30T12:00:00.000Z',
+    createId: () => 'invitation-1',
+    createToken: () => 'token-1',
+  });
+
+  const directory = listWorkspaceMembersDirectory({
+    db,
+    workspaceId: 'workspace-1',
+    userId: 'user-admin',
+  });
+
+  assert.deepEqual(directory.workspace, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  assert.deepEqual(directory.viewer, {
+    userId: 'user-admin',
+    membershipId: 'membership-admin',
+    role: 'admin',
+    status: 'active',
+    canInvite: true,
+  });
+  assert.deepEqual(
+    directory.members.map((member) => ({
+      id: member.id,
+      userId: member.userId,
+      displayName: member.displayName,
+      email: member.email,
+      role: member.role,
+      status: member.status,
+    })),
+    [
+      {
+        id: 'membership-owner',
+        userId: 'user-owner',
+        displayName: 'Owner',
+        email: 'owner@example.com',
+        role: 'owner',
+        status: 'active',
+      },
+      {
+        id: 'membership-admin',
+        userId: 'user-admin',
+        displayName: 'Admin',
+        email: 'admin@example.com',
+        role: 'admin',
+        status: 'active',
+      },
+      {
+        id: 'membership-member',
+        userId: 'user-member',
+        displayName: 'Member',
+        email: 'member@example.com',
+        role: 'member',
+        status: 'active',
+      },
+    ],
+  );
+  for (const member of directory.members) {
+    assert.equal(typeof member.joinedAt, 'string');
+    assert.equal(typeof member.updatedAt, 'string');
+  }
+  assert.deepEqual(directory.invitations, [
+    {
+      id: 'invitation-1',
+      email: 'pending@example.com',
+      role: 'member',
+      status: 'pending',
+      expiresAt: '2026-04-06T12:00:00.000Z',
+      invitedAt: '2026-03-30T12:00:00.000Z',
+      invitedByDisplayName: 'Owner',
+    },
+  ]);
+
+  db.close();
+});
+
+test('listWorkspaceMembersDirectory rejects users who are not active workspace members', () => {
+  const db = createDatabase();
+
+  insertUser(db, {
+    id: 'user-owner',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertUser(db, {
+    id: 'user-outsider',
+    email: 'outsider@example.com',
+    displayName: 'Outsider',
+  });
+
+  createWorkspace({
+    db,
+    ownerUserId: 'user-owner',
+    workspaceName: 'Acme Risk Desk',
+    workspaceSlug: 'acme-risk',
+    createId: createIdGenerator('workspace-1', 'membership-owner'),
+  });
+
+  assert.throws(
+    () =>
+      listWorkspaceMembersDirectory({
+        db,
+        workspaceId: 'workspace-1',
+        userId: 'user-outsider',
+      }),
+    (error) => {
+      assert.ok(error instanceof WorkspaceServiceError);
+      assert.equal(error.code, 'WORKSPACE_ACCESS_FORBIDDEN');
       return true;
     },
   );

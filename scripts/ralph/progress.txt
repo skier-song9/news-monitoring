@@ -26,6 +26,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For article read APIs, treat `article_analysis` as the feed grain, use `article_analysis_topic_label` for topic filtering, and deserialize the ordered `article_analysis.topic_labels` JSON snapshot for the response payload.
 - Use `article_analysis.id` as the stable key for article detail and drilldown queries, because one canonical `article` can legitimately appear under multiple monitoring targets in the same workspace.
 - For analytics aggregations, query high-risk `article_analysis` rows with non-null `article_content.published_at`, normalize publisher/reporter labels case-insensitively, and return `articleAnalysisIds` with `articleIds` so drilldowns stay aligned with the feed grain.
+- For lightweight UI stories in this repo, keep SQL and auth checks in the existing service module, render HTML in a small `src/ui/*.cjs` view, and wrap both with a dependency-free `node:http` route so `node:test` and browser demos exercise the same surface.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -223,4 +224,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: analytics queries in this repo should aggregate from `article_analysis` rather than `article`, because drilldowns and UI reads are target-specific.
   - Gotchas encountered: publisher and reporter names are not normalized at ingestion time, so aggregation code must collapse them case-insensitively or rankings will split the same source into duplicate buckets.
   - Useful context: there are still no `AGENTS.md` files in this repository to update, this story had no UI surface so browser verification was not applicable, and `npm run check` passed with 93 passing tests.
+---
+## 2026-04-02 11:29:50 KST - US-023
+- Implemented a server-rendered workspace members screen with current-member and pending-invitation sections, plus a built-in HTTP route and demo server for browser verification.
+- Added an admin-only invite form that posts back into `inviteTeammate`, preserves non-admin read-only access, and surfaces success or validation feedback inline.
+- Files changed: `package.json`, `scripts/workspace-members-demo.cjs`, `src/backend/workspace-service.cjs`, `src/http/workspace-members-app.cjs`, `src/ui/workspace-members-page.cjs`, `tests/workspace-members-app.test.cjs`, `tests/workspace-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: when there is no app shell yet, a small `node:http` route plus server-rendered HTML is enough to ship and browser-test a focused UI story without adding dependencies.
+  - Gotchas encountered: SQLite defaults can emit timestamps in mixed formats depending on whether rows come from explicit ISO writes or `CURRENT_TIMESTAMP`, so directory-style tests should assert required fields and ordering instead of exact timestamp formatting.
+  - Useful context: browser verification used `npm run members-demo` at `http://127.0.0.1:4310/workspaces/workspace-1/members?userId=user-owner`; there are still no `AGENTS.md` files in this repository to update, and `npm run check` passed with 101 passing tests.
 ---

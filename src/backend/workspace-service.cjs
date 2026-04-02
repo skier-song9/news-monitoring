@@ -132,6 +132,122 @@ function getInvitationByWorkspaceAndEmail(db, workspaceId, email) {
     .get(workspaceId, email);
 }
 
+function getWorkspaceById(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT id, slug, name
+      FROM workspace
+      WHERE id = ?
+    `)
+    .get(workspaceId);
+}
+
+function listWorkspaceMembersDirectory({ db, workspaceId, userId }) {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, 'workspaceId');
+  const normalizedUserId = normalizeRequiredString(userId, 'userId');
+  const workspace = getWorkspaceById(db, normalizedWorkspaceId);
+
+  if (!workspace) {
+    throw new WorkspaceServiceError('WORKSPACE_NOT_FOUND', 'Workspace was not found');
+  }
+
+  const viewerMembership = getMembershipByWorkspaceAndUser(
+    db,
+    normalizedWorkspaceId,
+    normalizedUserId,
+  );
+
+  if (!viewerMembership || viewerMembership.status !== ACTIVE_MEMBERSHIP_STATUS) {
+    throw new WorkspaceServiceError(
+      'WORKSPACE_ACCESS_FORBIDDEN',
+      'Only active workspace members can view members',
+    );
+  }
+
+  const members = db
+    .prepare(`
+      SELECT
+        workspace_membership.id,
+        workspace_membership.user_id,
+        workspace_membership.role,
+        workspace_membership.status,
+        workspace_membership.created_at,
+        workspace_membership.updated_at,
+        user_account.display_name,
+        user_account.email
+      FROM workspace_membership
+      INNER JOIN user_account
+        ON user_account.id = workspace_membership.user_id
+      WHERE workspace_membership.workspace_id = ?
+      ORDER BY CASE workspace_membership.role
+        WHEN 'owner' THEN 0
+        WHEN 'admin' THEN 1
+        ELSE 2
+      END,
+      LOWER(user_account.display_name),
+      LOWER(user_account.email)
+    `)
+    .all(normalizedWorkspaceId)
+    .map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      displayName: row.display_name,
+      email: row.email,
+      role: row.role,
+      status: row.status,
+      joinedAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+
+  const invitations = db
+    .prepare(`
+      SELECT
+        workspace_invitation.id,
+        workspace_invitation.email,
+        workspace_invitation.role,
+        workspace_invitation.status,
+        workspace_invitation.expires_at,
+        workspace_invitation.created_at,
+        inviter_user_account.display_name AS invited_by_display_name
+      FROM workspace_invitation
+      LEFT JOIN workspace_membership AS inviter_membership
+        ON inviter_membership.id = workspace_invitation.invited_by_membership_id
+      LEFT JOIN user_account AS inviter_user_account
+        ON inviter_user_account.id = inviter_membership.user_id
+      WHERE workspace_invitation.workspace_id = ?
+        AND workspace_invitation.status = ?
+      ORDER BY workspace_invitation.created_at DESC,
+        LOWER(workspace_invitation.email)
+    `)
+    .all(normalizedWorkspaceId, PENDING_INVITATION_STATUS)
+    .map((row) => ({
+      id: row.id,
+      email: row.email,
+      role: row.role,
+      status: row.status,
+      expiresAt: row.expires_at,
+      invitedAt: row.created_at,
+      invitedByDisplayName: row.invited_by_display_name,
+    }));
+
+  return {
+    workspace: {
+      id: workspace.id,
+      slug: workspace.slug,
+      name: workspace.name,
+    },
+    viewer: {
+      userId: normalizedUserId,
+      membershipId: viewerMembership.id,
+      role: viewerMembership.role,
+      status: viewerMembership.status,
+      canInvite: workspaceAdminRoles.includes(viewerMembership.role),
+    },
+    members,
+    invitations,
+  };
+}
+
 function createWorkspace({
   db,
   ownerUserId,
@@ -392,4 +508,5 @@ module.exports = {
   acceptInvitation,
   createWorkspace,
   inviteTeammate,
+  listWorkspaceMembersDirectory,
 };
