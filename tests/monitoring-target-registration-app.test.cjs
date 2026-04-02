@@ -6,6 +6,10 @@ const http = require('node:http');
 const { DatabaseSync } = require('node:sqlite');
 
 const { applyMigrations } = require('../src/db/migrations.cjs');
+const {
+  resolveEffectiveAlertPolicy,
+  saveWorkspaceAlertPolicy,
+} = require('../src/backend/alert-policy-service.cjs');
 const { createWorkspace } = require('../src/backend/workspace-service.cjs');
 const {
   getMonitoringTargetCollectorInput,
@@ -960,6 +964,232 @@ test('target registration page rejects users outside the workspace', async () =>
       response.body,
       'Only active workspace members can create monitoring targets',
     );
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('alert settings page shows workspace defaults and target override editors for workspace admins', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedReviewReadyTarget(db);
+  saveWorkspaceAlertPolicy({
+    db,
+    workspaceId: 'workspace-1',
+    userId: 'user-owner',
+    riskThreshold: 78,
+    slackEnabled: true,
+    slackWebhookUrl: 'https://hooks.slack.com/services/T000/B000/WORKSPACE',
+    emailEnabled: true,
+    emailRecipients: ['desk@example.com'],
+    createId: createIdGenerator('policy-workspace-1'),
+    now: () => '2026-04-02T03:10:00.000Z',
+  });
+  const server = await startServer(db);
+
+  try {
+    const response = await request(server, {
+      path: '/workspaces/workspace-1/alerts?userId=user-owner',
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /Alert settings/u);
+    assert.match(response.body, /Acme Risk Desk/u);
+    assert.match(response.body, /Workspace defaults/u);
+    assert.match(response.body, /Target overrides/u);
+    assert.match(response.body, /Acme Holdings/u);
+    assert.match(response.body, /Save workspace defaults/u);
+    assert.match(response.body, /Save target override/u);
+    assert.match(response.body, /Workspace default/u);
+    assert.match(response.body, /https:\/\/hooks\.slack\.com\/services\/T000\/B000\/WORKSPACE/u);
+    assert.match(response.body, /desk@example\.com/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('alert settings page requires a workspace admin', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedReviewReadyTarget(db);
+  const server = await startServer(db);
+
+  try {
+    const response = await request(server, {
+      path: '/workspaces/workspace-1/alerts?userId=user-member',
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.body, 'Only active workspace admins can manage alert policies');
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('alert settings page renders inline validation errors for slack, email, and sms inputs', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedReviewReadyTarget(db);
+  const server = await startServer(db);
+
+  try {
+    const invalidSlackResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/alerts?userId=user-owner',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=save-workspace-alert-settings&riskThreshold=82&slackEnabled=1&slackWebhookUrl=https%3A%2F%2Fexample.com%2Fnot-slack',
+    });
+
+    assert.equal(invalidSlackResponse.statusCode, 303);
+    assert.match(invalidSlackResponse.headers.location, /scope=workspace/u);
+    assert.match(invalidSlackResponse.headers.location, /errorField=slackWebhookUrl/u);
+
+    const invalidSlackPage = await request(server, {
+      path: invalidSlackResponse.headers.location,
+    });
+
+    assert.equal(invalidSlackPage.statusCode, 200);
+    assert.match(invalidSlackPage.body, /slackWebhookUrl must be a valid Slack webhook URL/u);
+    assert.match(invalidSlackPage.body, /https:\/\/example\.com\/not-slack/u);
+
+    const invalidEmailResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/alerts?userId=user-owner',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=save-target-alert-settings&monitoringTargetId=target-review-1&riskThreshold=83&emailEnabled=1&emailRecipients=not-an-email',
+    });
+
+    assert.equal(invalidEmailResponse.statusCode, 303);
+    assert.match(invalidEmailResponse.headers.location, /scope=target/u);
+    assert.match(invalidEmailResponse.headers.location, /monitoringTargetId=target-review-1/u);
+    assert.match(invalidEmailResponse.headers.location, /errorField=emailRecipients/u);
+
+    const invalidEmailPage = await request(server, {
+      path: invalidEmailResponse.headers.location,
+    });
+
+    assert.equal(invalidEmailPage.statusCode, 200);
+    assert.match(invalidEmailPage.body, /emailRecipients contains an invalid email address/u);
+    assert.match(invalidEmailPage.body, />not-an-email<\/textarea>/u);
+
+    const invalidSmsResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/alerts?userId=user-owner',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=save-target-alert-settings&monitoringTargetId=target-review-1&riskThreshold=83&smsEnabled=1&smsRecipients=202-555-0100',
+    });
+
+    assert.equal(invalidSmsResponse.statusCode, 303);
+    assert.match(invalidSmsResponse.headers.location, /errorField=smsRecipients/u);
+
+    const invalidSmsPage = await request(server, {
+      path: invalidSmsResponse.headers.location,
+    });
+
+    assert.equal(invalidSmsPage.statusCode, 200);
+    assert.match(invalidSmsPage.body, /smsRecipients contains an invalid E\.164 phone number/u);
+    assert.match(invalidSmsPage.body, />202-555-0100<\/textarea>/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('alert settings page saves workspace defaults and target overrides with effective policy summaries', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedReviewReadyTarget(db);
+  const server = await startServer(db, {
+    createId: createIdGenerator('policy-workspace-1', 'policy-target-1'),
+  });
+
+  try {
+    const workspaceSaveResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/alerts?userId=user-owner',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=save-workspace-alert-settings&riskThreshold=78&slackEnabled=1&slackWebhookUrl=https%3A%2F%2Fhooks.slack.com%2Fservices%2FT000%2FB000%2FWORKSPACE&emailEnabled=1&emailRecipients=desk%40example.com',
+    });
+
+    assert.equal(workspaceSaveResponse.statusCode, 303);
+    assert.equal(
+      workspaceSaveResponse.headers.location,
+      '/workspaces/workspace-1/alerts?userId=user-owner&scope=workspace&saved=workspace',
+    );
+
+    const targetSaveResponse = await request(server, {
+      method: 'POST',
+      path: '/workspaces/workspace-1/alerts?userId=user-owner',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'action=save-target-alert-settings&monitoringTargetId=target-review-1&riskThreshold=91&emailEnabled=1&emailRecipients=owner%40example.com&smsEnabled=1&smsRecipients=%2B12025550111',
+    });
+
+    assert.equal(targetSaveResponse.statusCode, 303);
+    assert.equal(
+      targetSaveResponse.headers.location,
+      '/workspaces/workspace-1/alerts?userId=user-owner&scope=target&monitoringTargetId=target-review-1&saved=target',
+    );
+
+    const workspacePolicy = resolveEffectiveAlertPolicy({
+      db,
+      workspaceId: 'workspace-1',
+    });
+    const targetPolicy = resolveEffectiveAlertPolicy({
+      db,
+      workspaceId: 'workspace-1',
+      monitoringTargetId: 'target-review-1',
+    });
+
+    assert.deepEqual(workspacePolicy, {
+      id: 'policy-workspace-1',
+      workspaceId: 'workspace-1',
+      monitoringTargetId: null,
+      scope: 'workspace',
+      riskThreshold: 78,
+      slackEnabled: true,
+      slackWebhookUrl: 'https://hooks.slack.com/services/T000/B000/WORKSPACE',
+      emailEnabled: true,
+      emailRecipients: ['desk@example.com'],
+      smsEnabled: false,
+      smsRecipients: [],
+    });
+    assert.deepEqual(targetPolicy, {
+      id: 'policy-target-1',
+      workspaceId: 'workspace-1',
+      monitoringTargetId: 'target-review-1',
+      scope: 'target',
+      riskThreshold: 91,
+      slackEnabled: false,
+      slackWebhookUrl: null,
+      emailEnabled: true,
+      emailRecipients: ['owner@example.com'],
+      smsEnabled: true,
+      smsRecipients: ['+12025550111'],
+    });
+
+    const reloadedPage = await request(server, {
+      path: targetSaveResponse.headers.location,
+    });
+
+    assert.equal(reloadedPage.statusCode, 200);
+    assert.match(reloadedPage.body, /Target override saved/u);
+    assert.match(reloadedPage.body, /Target override/u);
+    assert.match(reloadedPage.body, /value="91"/u);
+    assert.match(reloadedPage.body, /owner@example\.com/u);
+    assert.match(reloadedPage.body, /\+12025550111/u);
   } finally {
     await closeServer(server);
     db.close();

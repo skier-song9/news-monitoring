@@ -30,6 +30,7 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For newline-delimited form inputs like seed keywords, trim lines on both the server parser and a small `setCustomValidity` browser guard so whitespace-only submissions are blocked before POST and still rejected on direct requests.
 - For dependency-free `node:http` workflow screens, keep POST actions redirecting back to GET with query-param flash state, and derive button enabled/disabled state from backend workflow payloads so the UI cannot drift from lifecycle rules.
 - For pre-activation editing inside server-rendered review flows, keep keyword mutation actions on the existing target-specific review route, gate direct POST writes with the same workflow `canEdit` state used by the page, and use redirect query params for success flashes so GET stays canonical.
+- For multi-scope settings screens, seed each form from the current effective backend policy and round-trip `scope` plus form values in query params so redirect-based validation returns to the correct card without losing inherited defaults.
 - When review surfaces show third-party evidence links, validate stored URLs as absolute `http`/`https` during ingestion and still sanitize anchors at render time so legacy rows cannot become scriptable links.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
@@ -264,4 +265,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: keyword-management actions fit this repo best as small POST forms on the existing review page, with redirect-based flash params and workflow-derived `canEdit` state instead of a separate API surface.
   - Gotchas encountered: backend keyword services still allow updates for active targets, so this review-route UI must enforce its own post-activation read-only rule before calling add/disable/remove actions.
   - Useful context: browser verification used `npm run target-registration-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/targets/target-review-demo-1/review?userId=user-owner`; adding an excluded keyword, disabling `Jane Doe`, removing the excluded keyword, saving `partial_match`, and activating the target all worked, and a screenshot was captured at `us-026-keyword-editor-review.png`.
+---
+## 2026-04-02 13:05:59 KST - US-027
+- Implemented a server-rendered alert settings screen at `/workspaces/:workspaceId/alerts` with one workspace-default form plus target-specific override forms, all backed by the existing alert policy service and effective-policy precedence rules.
+- Added inline redirect-based validation for Slack webhook URLs, email recipients, and SMS recipients, plus demo seeding/browser coverage so saved settings reload with the correct effective threshold and enabled-channel summary.
+- Files changed: `package.json`, `scripts/monitoring-target-registration-demo.cjs`, `src/backend/alert-policy-service.cjs`, `src/http/monitoring-target-registration-app.cjs`, `src/ui/monitoring-target-registration-page.cjs`, `tests/monitoring-target-registration-app.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: alert settings screens fit this codebase best when the backend exposes one page-data helper for effective policy resolution and the HTTP layer only handles form parsing plus scoped flash/query-param round-trips.
+  - Gotchas encountered: workspace metadata reads in service modules need the full `id`/`slug`/`name` shape when a new server-rendered page uses that same helper for titles and headers, otherwise browser-only regressions can slip past route tests.
+  - Useful context: browser verification used `npm run alert-settings-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/alerts?userId=user-owner`; the page rendered workspace defaults plus a target override, a workspace threshold save reloaded successfully, and a screenshot was captured at `us-027-alert-settings-ui.png`.
 ---

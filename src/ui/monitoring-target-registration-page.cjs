@@ -722,6 +722,107 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         color: var(--accent-strong);
       }
 
+      .panel-highlighted,
+      .target-policy-card-highlighted {
+        border-color: rgba(40, 78, 59, 0.24);
+        box-shadow: 0 24px 60px rgba(22, 49, 35, 0.18);
+      }
+
+      .policy-summary-grid,
+      .target-policy-grid,
+      .channel-grid,
+      .policy-overview-list {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .policy-summary-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-bottom: 1rem;
+      }
+
+      .policy-stat,
+      .channel-card,
+      .target-policy-card,
+      .policy-overview-list li {
+        padding: 1rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.56);
+        border: 1px solid rgba(40, 78, 59, 0.1);
+      }
+
+      .policy-stat strong,
+      .target-policy-card-header strong {
+        display: block;
+        margin-bottom: 0.35rem;
+      }
+
+      .policy-stat p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .target-policy-card,
+      .alert-settings-form {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .target-policy-card-header,
+      .toggle-option {
+        display: flex;
+        gap: 0.9rem;
+        align-items: flex-start;
+        justify-content: space-between;
+      }
+
+      .target-policy-card-header {
+        flex-wrap: wrap;
+      }
+
+      .toggle-option input {
+        width: auto;
+        margin-top: 0.25rem;
+      }
+
+      .toggle-option span {
+        display: grid;
+        gap: 0.2rem;
+        flex: 1 1 auto;
+      }
+
+      .toggle-option small {
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .channel-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .channel-card {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .field-error {
+        margin: 0;
+        color: var(--error);
+        font-size: 0.92rem;
+      }
+
+      .form-error {
+        padding: 0.9rem 1rem;
+        border-radius: 16px;
+        background: rgba(249, 227, 222, 0.96);
+      }
+
+      .policy-overview-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+
       .body-${bodyClass} .hero-copy strong {
         color: var(--accent-strong);
       }
@@ -729,7 +830,9 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
       @media (max-width: 820px) {
         .layout,
         .field-grid,
-        .meta-list {
+        .meta-list,
+        .policy-summary-grid,
+        .channel-grid {
           grid-template-columns: 1fr;
         }
 
@@ -822,6 +925,292 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
     </script>
   </body>
 </html>`;
+}
+
+function getAlertPolicySourceLabel(scope) {
+  if (scope === 'target') {
+    return 'Target override';
+  }
+
+  if (scope === 'workspace') {
+    return 'Workspace default';
+  }
+
+  if (scope === 'monitoring_target_default') {
+    return 'Target default threshold';
+  }
+
+  return 'Platform default threshold';
+}
+
+function getAlertPolicySourceDescription(scope, options = {}) {
+  const isWorkspacePolicy = options.isWorkspacePolicy === true;
+
+  if (scope === 'target') {
+    return 'This target has a saved override, so it no longer inherits the workspace default.';
+  }
+
+  if (scope === 'workspace') {
+    return isWorkspacePolicy
+      ? 'Targets without overrides inherit the current workspace default policy.'
+      : 'This target is inheriting the current workspace default policy.';
+  }
+
+  if (scope === 'monitoring_target_default') {
+    return 'No saved workspace or target policy exists yet, so only the target threshold is active.';
+  }
+
+  return 'No workspace policy row exists yet, so the platform threshold remains the fallback.';
+}
+
+function getEnabledChannelSummary(policy) {
+  const enabledChannels = [];
+
+  if (policy.slackEnabled) {
+    enabledChannels.push('Slack');
+  }
+
+  if (policy.emailEnabled) {
+    enabledChannels.push('Email');
+  }
+
+  if (policy.smsEnabled) {
+    enabledChannels.push('SMS');
+  }
+
+  return enabledChannels.length ? enabledChannels.join(', ') : 'No channels enabled';
+}
+
+function renderFieldError(errors, fieldName) {
+  if (!errors || !errors[fieldName]) {
+    return '';
+  }
+
+  return `<p class="field-error">${escapeHtml(errors[fieldName])}</p>`;
+}
+
+function renderAlertPolicySummary(policy) {
+  return `
+    <div class="policy-summary-grid">
+      <article class="policy-stat">
+        <strong>Effective threshold</strong>
+        <p>${escapeHtml(policy.riskThreshold)}</p>
+      </article>
+      <article class="policy-stat">
+        <strong>Enabled channels</strong>
+        <p>${escapeHtml(getEnabledChannelSummary(policy))}</p>
+      </article>
+      <article class="policy-stat">
+        <strong>Policy source</strong>
+        <p>${escapeHtml(getAlertPolicySourceLabel(policy.scope))}</p>
+      </article>
+    </div>
+  `;
+}
+
+function renderAlertSettingsForm({
+  action,
+  formState,
+  submitLabel,
+  monitoringTargetId = null,
+}) {
+  const values = formState.values;
+  const errors = formState.errors ?? {};
+  const scopeId = monitoringTargetId ? escapeHtml(monitoringTargetId) : 'workspace';
+
+  return `
+    <form method="post" class="alert-settings-form">
+      <input type="hidden" name="action" value="${escapeHtml(action)}" />
+      ${monitoringTargetId
+        ? `<input type="hidden" name="monitoringTargetId" value="${scopeId}" />`
+        : ''}
+      ${errors.form ? `<p class="field-error form-error">${escapeHtml(errors.form)}</p>` : ''}
+      <div class="field-grid">
+        <div>
+          <label for="risk-threshold-${scopeId}">Risk threshold</label>
+          <input
+            id="risk-threshold-${scopeId}"
+            name="riskThreshold"
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            inputmode="numeric"
+            value="${escapeHtml(values.riskThreshold)}"
+            placeholder="70"
+          />
+          <p class="field-help">Alerts trigger when the stored risk score meets or exceeds this value.</p>
+          ${renderFieldError(errors, 'riskThreshold')}
+        </div>
+      </div>
+      <div class="channel-grid">
+        <section class="channel-card">
+          <label class="toggle-option">
+            <input type="checkbox" name="slackEnabled" value="1"${values.slackEnabled ? ' checked' : ''} />
+            <span>
+              <strong>Slack</strong>
+              <small>Send alert notifications to a Slack webhook destination.</small>
+            </span>
+          </label>
+          <div>
+            <label for="slack-url-${scopeId}">Webhook URL</label>
+            <input
+              id="slack-url-${scopeId}"
+              name="slackWebhookUrl"
+              type="url"
+              placeholder="https://hooks.slack.com/services/..."
+              value="${escapeHtml(values.slackWebhookUrl)}"
+            />
+            <p class="field-help">Use a valid Slack incoming webhook URL.</p>
+            ${renderFieldError(errors, 'slackWebhookUrl')}
+          </div>
+        </section>
+        <section class="channel-card">
+          <label class="toggle-option">
+            <input type="checkbox" name="emailEnabled" value="1"${values.emailEnabled ? ' checked' : ''} />
+            <span>
+              <strong>Email</strong>
+              <small>Enter one address per line or separate multiple recipients with commas.</small>
+            </span>
+          </label>
+          <div>
+            <label for="email-recipients-${scopeId}">Recipients</label>
+            <textarea
+              id="email-recipients-${scopeId}"
+              name="emailRecipients"
+              placeholder="risk@example.com&#10;legal@example.com"
+            >${escapeHtml(values.emailRecipients)}</textarea>
+            <p class="field-help">The backend normalizes duplicate addresses before saving.</p>
+            ${renderFieldError(errors, 'emailRecipients')}
+          </div>
+        </section>
+        <section class="channel-card">
+          <label class="toggle-option">
+            <input type="checkbox" name="smsEnabled" value="1"${values.smsEnabled ? ' checked' : ''} />
+            <span>
+              <strong>SMS</strong>
+              <small>Use E.164 formatting such as <code>+12025550100</code>.</small>
+            </span>
+          </label>
+          <div>
+            <label for="sms-recipients-${scopeId}">Recipients</label>
+            <textarea
+              id="sms-recipients-${scopeId}"
+              name="smsRecipients"
+              placeholder="+12025550100&#10;+12025550101"
+            >${escapeHtml(values.smsRecipients)}</textarea>
+            <p class="field-help">Enter one number per line or separate them with commas.</p>
+            ${renderFieldError(errors, 'smsRecipients')}
+          </div>
+        </section>
+      </div>
+      <div class="form-actions">
+        <p class="muted-copy">Only workspace admins can save or update these settings.</p>
+        <button type="submit">${escapeHtml(submitLabel)}</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderAlertSettingsTargetCard(alertSettingsPage, monitoringTarget) {
+  const targetReviewHref = `/workspaces/${escapeHtml(alertSettingsPage.workspace.id)}/targets/${escapeHtml(monitoringTarget.id)}/review?userId=${escapeHtml(alertSettingsPage.viewer.userId)}`;
+
+  return `
+    <article class="target-policy-card${monitoringTarget.alertSettingsForm.isHighlighted ? ' target-policy-card-highlighted' : ''}">
+      <div class="target-policy-card-header">
+        <div>
+          <h3>${escapeHtml(monitoringTarget.displayName)}</h3>
+          <p class="muted-copy">
+            ${escapeHtml(monitoringTarget.type)} target, status <strong>${escapeHtml(monitoringTarget.status)}</strong>, default threshold ${escapeHtml(monitoringTarget.defaultRiskThreshold)}.
+          </p>
+        </div>
+        <span class="status-pill">${escapeHtml(getAlertPolicySourceLabel(monitoringTarget.effectivePolicy.scope))}</span>
+      </div>
+      ${renderAlertPolicySummary(monitoringTarget.effectivePolicy)}
+      <p class="muted-copy">${escapeHtml(getAlertPolicySourceDescription(monitoringTarget.effectivePolicy.scope))}</p>
+      ${renderAlertSettingsForm({
+        action: 'save-target-alert-settings',
+        formState: monitoringTarget.alertSettingsForm,
+        submitLabel: 'Save target override',
+        monitoringTargetId: monitoringTarget.id,
+      })}
+      <div class="form-actions">
+        <p class="muted-copy">${monitoringTarget.note ? escapeHtml(monitoringTarget.note) : 'No operator note is stored for this target.'}</p>
+        <a class="link-button" href="${targetReviewHref}">Open review workflow</a>
+      </div>
+    </article>
+  `;
+}
+
+function renderAlertSettingsPage({
+  alertSettingsPage,
+  flashMessage,
+}) {
+  return renderLayout({
+    title: `Alert settings | ${alertSettingsPage.workspace.name}`,
+    eyebrow: `${alertSettingsPage.workspace.name} | Alerts`,
+    bodyClass: 'alert-settings',
+    heroTitle: 'Alert settings',
+    heroCopy:
+      'Workspace defaults set the baseline delivery policy. Each monitoring target can inherit that policy or save a dedicated override when a subject needs a different threshold or channel mix.',
+    content: `
+      ${renderFlashMessage(flashMessage)}
+      <div class="layout">
+        <section class="stack">
+          <section class="panel${alertSettingsPage.workspacePolicy.form.isHighlighted ? ' panel-highlighted' : ''}">
+            <div class="panel-intro">
+              <h2>Workspace defaults</h2>
+              <p class="muted-copy">Use this as the baseline policy for every target that does not have its own override.</p>
+            </div>
+            ${renderAlertPolicySummary(alertSettingsPage.workspacePolicy.effectivePolicy)}
+            <p class="muted-copy">${escapeHtml(getAlertPolicySourceDescription(alertSettingsPage.workspacePolicy.effectivePolicy.scope, { isWorkspacePolicy: true }))}</p>
+            ${renderAlertSettingsForm({
+              action: 'save-workspace-alert-settings',
+              formState: alertSettingsPage.workspacePolicy.form,
+              submitLabel: 'Save workspace defaults',
+            })}
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Target overrides</h2>
+              <p class="muted-copy">Targets without an override inherit the workspace policy automatically, while new overrides start from the currently effective settings.</p>
+            </div>
+            <div class="target-policy-grid">
+              ${alertSettingsPage.monitoringTargets.length
+                ? alertSettingsPage.monitoringTargets
+                    .map((monitoringTarget) =>
+                      renderAlertSettingsTargetCard(alertSettingsPage, monitoringTarget),
+                    )
+                    .join('')
+                : '<p class="muted-copy">No monitoring targets exist yet, so only workspace defaults can be configured right now.</p>'}
+            </div>
+          </section>
+        </section>
+        <aside class="stack">
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Policy precedence</h2>
+              <p class="muted-copy">Alert resolution follows the same backend order used by dispatch jobs.</p>
+            </div>
+            <ol class="policy-overview-list">
+              <li><strong>Target override</strong> wins when a target-specific row exists.</li>
+              <li><strong>Workspace default</strong> applies when no target override is saved.</li>
+              <li><strong>Target threshold</strong> is the fallback when no alert policy row exists yet.</li>
+            </ol>
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Operator context</h2>
+            </div>
+            <p class="muted-copy">Signed in as <strong>${escapeHtml(alertSettingsPage.viewer.role)}</strong> for this workspace. Save actions write directly into the auditable <code>alert_policy</code> table.</p>
+            <p style="margin-top: 1rem;">
+              <a class="link-button" href="/workspaces/${escapeHtml(alertSettingsPage.workspace.id)}/targets/new?userId=${escapeHtml(alertSettingsPage.viewer.userId)}">Register another target</a>
+            </p>
+          </section>
+        </aside>
+      </div>
+    `,
+  });
 }
 
 function renderMonitoringTargetRegistrationPage({
@@ -1139,6 +1528,7 @@ function renderMonitoringTargetReviewPage({
 }
 
 module.exports = {
+  renderAlertSettingsPage,
   renderMonitoringTargetRegistrationPage,
   renderMonitoringTargetReviewPage,
 };

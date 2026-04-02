@@ -242,7 +242,7 @@ function hasOwnValue(object, key) {
 function getWorkspace(db, workspaceId) {
   return db
     .prepare(`
-      SELECT id
+      SELECT id, slug, name
       FROM workspace
       WHERE id = ?
     `)
@@ -267,6 +267,32 @@ function getMonitoringTarget(db, workspaceId, monitoringTargetId) {
       WHERE workspace_id = ? AND id = ?
     `)
     .get(workspaceId, monitoringTargetId);
+}
+
+function listMonitoringTargets(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT
+        id,
+        workspace_id,
+        type,
+        display_name,
+        note,
+        status,
+        default_risk_threshold
+      FROM monitoring_target
+      WHERE workspace_id = ?
+      ORDER BY
+        CASE status
+          WHEN 'active' THEN 0
+          WHEN 'awaiting_activation' THEN 1
+          WHEN 'ready_for_review' THEN 2
+          ELSE 3
+        END,
+        display_name COLLATE NOCASE,
+        id
+    `)
+    .all(workspaceId);
 }
 
 function getAlertPolicyRow(db, workspaceId, monitoringTargetId) {
@@ -353,6 +379,31 @@ function toAlertPolicyRecord(row, scope) {
   };
 }
 
+function toResolvedAlertPolicyRecord({
+  workspaceId,
+  monitoringTargetId,
+  resolvedPolicy,
+}) {
+  if (resolvedPolicy.policyRow) {
+    return toAlertPolicyRecord(resolvedPolicy.policyRow, resolvedPolicy.scope);
+  }
+
+  return {
+    id: null,
+    workspaceId,
+    monitoringTargetId:
+      resolvedPolicy.scope === 'monitoring_target_default' ? monitoringTargetId : null,
+    scope: resolvedPolicy.scope,
+    riskThreshold: resolvedPolicy.policy.riskThreshold,
+    slackEnabled: resolvedPolicy.policy.slackEnabled,
+    slackWebhookUrl: resolvedPolicy.policy.slackWebhookUrl,
+    emailEnabled: resolvedPolicy.policy.emailEnabled,
+    emailRecipients: resolvedPolicy.policy.emailRecipients,
+    smsEnabled: resolvedPolicy.policy.smsEnabled,
+    smsRecipients: resolvedPolicy.policy.smsRecipients,
+  };
+}
+
 function requireActiveWorkspaceAdmin(db, workspaceId, userId) {
   const membership = getMembership(db, workspaceId, userId);
 
@@ -368,6 +419,76 @@ function requireActiveWorkspaceAdmin(db, workspaceId, userId) {
   }
 
   return membership;
+}
+
+function getAlertSettingsPage({
+  db,
+  workspaceId,
+  userId,
+}) {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, 'workspaceId');
+  const normalizedUserId = normalizeRequiredString(userId, 'userId');
+  const workspace = getWorkspace(db, normalizedWorkspaceId);
+
+  if (!workspace) {
+    throw new AlertPolicyServiceError('WORKSPACE_NOT_FOUND', 'Workspace does not exist');
+  }
+
+  const membership = requireActiveWorkspaceAdmin(
+    db,
+    normalizedWorkspaceId,
+    normalizedUserId,
+  );
+  const workspaceResolvedPolicy = resolveEffectiveAlertPolicyConfig(
+    db,
+    normalizedWorkspaceId,
+    null,
+  );
+  const monitoringTargets = listMonitoringTargets(db, normalizedWorkspaceId).map(
+    (monitoringTarget) => {
+      const targetResolvedPolicy = resolveEffectiveAlertPolicyConfig(
+        db,
+        normalizedWorkspaceId,
+        monitoringTarget.id,
+      );
+
+      return {
+        id: monitoringTarget.id,
+        workspaceId: monitoringTarget.workspace_id,
+        type: monitoringTarget.type,
+        displayName: monitoringTarget.display_name,
+        note: monitoringTarget.note,
+        status: monitoringTarget.status,
+        defaultRiskThreshold: monitoringTarget.default_risk_threshold,
+        effectivePolicy: toResolvedAlertPolicyRecord({
+          workspaceId: normalizedWorkspaceId,
+          monitoringTargetId: monitoringTarget.id,
+          resolvedPolicy: targetResolvedPolicy,
+        }),
+      };
+    },
+  );
+
+  return {
+    workspace: {
+      id: workspace.id,
+      slug: workspace.slug,
+      name: workspace.name,
+    },
+    viewer: {
+      userId: normalizedUserId,
+      membershipId: membership.id,
+      role: membership.role,
+    },
+    workspacePolicy: {
+      effectivePolicy: toResolvedAlertPolicyRecord({
+        workspaceId: normalizedWorkspaceId,
+        monitoringTargetId: null,
+        resolvedPolicy: workspaceResolvedPolicy,
+      }),
+    },
+    monitoringTargets,
+  };
 }
 
 function resolveEffectiveAlertPolicyConfig(db, workspaceId, monitoringTargetId) {
@@ -668,6 +789,7 @@ function resolveEffectiveAlertPolicy({
 
 module.exports = {
   AlertPolicyServiceError,
+  getAlertSettingsPage,
   resolveEffectiveAlertPolicy,
   saveTargetAlertPolicy,
   saveWorkspaceAlertPolicy,

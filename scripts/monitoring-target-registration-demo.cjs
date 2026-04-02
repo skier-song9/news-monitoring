@@ -5,6 +5,10 @@ const { DatabaseSync } = require('node:sqlite');
 
 const { applyMigrations } = require('../src/db/migrations.cjs');
 const {
+  saveTargetAlertPolicy,
+  saveWorkspaceAlertPolicy,
+} = require('../src/backend/alert-policy-service.cjs');
+const {
   runMonitoringTargetDiscoveryJob,
 } = require('../src/backend/monitoring-target-discovery-job.cjs');
 const {
@@ -120,6 +124,35 @@ async function seedReviewDemoTarget(db, workspaceId) {
     }),
   });
 
+  saveWorkspaceAlertPolicy({
+    db,
+    workspaceId,
+    userId: 'user-owner',
+    riskThreshold: 78,
+    slackEnabled: true,
+    slackWebhookUrl: 'https://hooks.slack.com/services/T000/B000/WORKSPACE',
+    emailEnabled: true,
+    emailRecipients: ['desk@acme.example'],
+    createId: createIdGenerator('policy-workspace-demo-1'),
+    now: () => '2026-04-02T02:20:00.000Z',
+  });
+
+  saveTargetAlertPolicy({
+    db,
+    workspaceId,
+    monitoringTargetId: target.id,
+    userId: 'user-owner',
+    riskThreshold: 91,
+    slackEnabled: false,
+    slackWebhookUrl: '',
+    emailEnabled: true,
+    emailRecipients: ['owner@acme.example'],
+    smsEnabled: true,
+    smsRecipients: ['+12025550111'],
+    createId: createIdGenerator('policy-target-demo-1'),
+    now: () => '2026-04-02T02:25:00.000Z',
+  });
+
   return target;
 }
 
@@ -155,6 +188,7 @@ seedReviewDemoTarget(db, workspace.id)
       process.stdout.write(`Target registration demo running on http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/new?userId=user-owner\n`);
       process.stdout.write(`Member demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/new?userId=user-member\n`);
       process.stdout.write(`Review demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/${target.id}/review?userId=user-owner\n`);
+      process.stdout.write(`Alert settings demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/alerts?userId=user-owner\n`);
     });
   })
   .catch((error) => {
