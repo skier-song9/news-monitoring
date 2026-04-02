@@ -9,6 +9,10 @@ const {
   saveWorkspaceAlertPolicy,
 } = require('../backend/alert-policy-service.cjs');
 const {
+  ArticleFeedQueryServiceError,
+  getArticleDashboardPage,
+} = require('../backend/article-feed-query-service.cjs');
+const {
   MonitoringTargetServiceError,
   activateMonitoringTarget,
   addTargetKeyword,
@@ -24,6 +28,10 @@ const {
   renderMonitoringTargetRegistrationPage,
   renderMonitoringTargetReviewPage,
 } = require('../ui/monitoring-target-registration-page.cjs');
+const {
+  renderArticleDashboardPage,
+  renderArticleDashboardResults,
+} = require('../ui/article-dashboard-page.cjs');
 
 function normalizeRequestUserId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -63,6 +71,10 @@ function getReviewRouteMatch(pathname) {
 
 function getAlertSettingsRouteMatch(pathname) {
   return pathname.match(/^\/workspaces\/([^/]+)\/alerts\/?$/u);
+}
+
+function getArticleDashboardRouteMatch(pathname) {
+  return pathname.match(/^\/workspaces\/([^/]+)\/articles\/?$/u);
 }
 
 function parseFormBody(request) {
@@ -512,12 +524,50 @@ function buildAlertSettingsLocation(requestUrl, workspaceId, state = {}) {
   return search ? `${pathname}?${search}` : pathname;
 }
 
+function buildArticleDashboardLocation(requestUrl, workspaceId, state = {}) {
+  const nextParams = new URLSearchParams();
+  const userId = requestUrl.searchParams.get('userId');
+
+  if (userId) {
+    nextParams.set('userId', userId);
+  }
+
+  for (const [key, value] of Object.entries(state)) {
+    if (value == null) {
+      continue;
+    }
+
+    if (value === '') {
+      nextParams.set(key, '');
+      continue;
+    }
+
+    nextParams.set(key, String(value));
+  }
+
+  const search = nextParams.toString();
+  const pathname = `/workspaces/${encodeURIComponent(workspaceId)}/articles`;
+  return search ? `${pathname}?${search}` : pathname;
+}
+
 function getErrorStatusCode(error) {
   if (
     error.code === 'WORKSPACE_NOT_FOUND' ||
     error.code === 'MONITORING_TARGET_NOT_FOUND'
   ) {
     return 404;
+  }
+
+  return 403;
+}
+
+function getArticleFeedErrorStatusCode(error) {
+  if (error.code === 'WORKSPACE_NOT_FOUND') {
+    return 404;
+  }
+
+  if (error.code === 'INVALID_INPUT') {
+    return 400;
   }
 
   return 403;
@@ -679,6 +729,61 @@ function createMonitoringTargetRegistrationApp({
 
           if (error instanceof Error && /16kb/u.test(error.message)) {
             sendText(response, 413, error.message);
+            return;
+          }
+
+          throw error;
+        }
+
+        return;
+      }
+
+      sendText(response, 405, 'Method not allowed');
+      return;
+    }
+
+    const articleDashboardRouteMatch = getArticleDashboardRouteMatch(requestUrl.pathname);
+
+    if (articleDashboardRouteMatch) {
+      const workspaceId = decodeURIComponent(articleDashboardRouteMatch[1]);
+
+      if (request.method === 'GET') {
+        try {
+          const dashboardPage = getArticleDashboardPage({
+            db,
+            workspaceId,
+            userId,
+            monitoringTargetId: requestUrl.searchParams.get('monitoringTargetId'),
+            riskBand: requestUrl.searchParams.get('riskBand'),
+            topicLabel: requestUrl.searchParams.get('topicLabel'),
+            publisher: requestUrl.searchParams.get('publisher'),
+            publishedFrom: requestUrl.searchParams.get('publishedFrom'),
+            publishedTo: requestUrl.searchParams.get('publishedTo'),
+            sort: requestUrl.searchParams.get('sort'),
+          });
+
+          if (requestUrl.searchParams.get('fragment') === 'results') {
+            sendHtml(
+              response,
+              200,
+              renderArticleDashboardResults({
+                dashboardPage,
+              }),
+            );
+            return;
+          }
+
+          sendHtml(
+            response,
+            200,
+            renderArticleDashboardPage({
+              dashboardPage,
+              clearFiltersHref: buildArticleDashboardLocation(requestUrl, workspaceId),
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ArticleFeedQueryServiceError) {
+            sendText(response, getArticleFeedErrorStatusCode(error), error.message);
             return;
           }
 

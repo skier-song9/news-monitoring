@@ -7,6 +7,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { applyMigrations } = require('../src/db/migrations.cjs');
 const {
   ArticleFeedQueryServiceError,
+  getArticleDashboardPage,
   listArticleFeed,
 } = require('../src/backend/article-feed-query-service.cjs');
 const { completedArticleIngestionStatus } = require('../src/db/schema/article-ingestion.cjs');
@@ -497,6 +498,82 @@ test('listArticleFeed supports explicit sort filters', () => {
     newestFirstArticles.map((article) => article.articleAnalysisId),
     ['analysis-2', 'analysis-1', 'analysis-3', 'analysis-4'],
   );
+
+  db.close();
+});
+
+test('listArticleFeed accepts date-only dashboard filter values', () => {
+  const db = createDatabase();
+  seedWorkspaceFixture(db);
+
+  const filteredArticles = listArticleFeed({
+    db,
+    workspaceId: 'workspace-1',
+    userId: 'user-member',
+    publishedFrom: '2026-03-30',
+    publishedTo: '2026-03-30',
+  });
+
+  assert.deepEqual(
+    filteredArticles.map((article) => article.articleAnalysisId),
+    ['analysis-1'],
+  );
+
+  db.close();
+});
+
+test('getArticleDashboardPage returns workspace context and filter options for the live UI', () => {
+  const db = createDatabase();
+  seedWorkspaceFixture(db);
+
+  const dashboardPage = getArticleDashboardPage({
+    db,
+    workspaceId: 'workspace-1',
+    userId: 'user-member',
+    monitoringTargetId: 'target-acme',
+    riskBand: 'high',
+    topicLabel: 'governance',
+    publisher: ' Financial Post ',
+    publishedFrom: '2026-03-30',
+    publishedTo: '2026-03-30',
+    sort: 'newest',
+  });
+
+  assert.deepEqual(dashboardPage.workspace, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  assert.equal(dashboardPage.viewer.userId, 'user-member');
+  assert.equal(dashboardPage.filters.values.monitoringTargetId, 'target-acme');
+  assert.equal(dashboardPage.filters.values.riskBand, 'high');
+  assert.equal(dashboardPage.filters.values.topicLabel, 'governance');
+  assert.equal(dashboardPage.filters.values.publisher, 'Financial Post');
+  assert.equal(dashboardPage.filters.values.publishedFrom, '2026-03-30');
+  assert.equal(dashboardPage.filters.values.publishedTo, '2026-03-30');
+  assert.equal(dashboardPage.filters.values.sort, 'newest');
+  assert.deepEqual(
+    dashboardPage.filters.options.monitoringTargets.map((target) => target.id),
+    ['target-acme', 'target-ceo'],
+  );
+  assert.deepEqual(
+    dashboardPage.filters.options.riskBands.map((riskBand) => riskBand.value),
+    ['low', 'medium', 'high'],
+  );
+  assert.deepEqual(dashboardPage.filters.options.topics, [
+    'governance',
+    'legal',
+    'operations',
+    'people',
+  ]);
+  assert.deepEqual(dashboardPage.filters.options.publishers, [
+    'Daily Ledger',
+    'Financial Post',
+    'Metro News',
+  ]);
+  assert.equal(dashboardPage.articles.length, 1);
+  assert.equal(dashboardPage.articles[0].articleAnalysisId, 'analysis-1');
+  assert.equal(dashboardPage.liveRefresh.intervalMs, 4000);
 
   db.close();
 });

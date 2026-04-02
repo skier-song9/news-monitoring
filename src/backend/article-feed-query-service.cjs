@@ -3,7 +3,28 @@
 const { articleAnalysisRiskBands } = require('../db/schema/analysis-alert.cjs');
 
 const ACTIVE_MEMBERSHIP_STATUS = 'active';
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
+
 const articleFeedSorts = ['highest_risk', 'lowest_risk', 'newest', 'oldest'];
+const articleDashboardLiveRefreshIntervalMs = 4000;
+const articleDashboardSortOptions = [
+  {
+    value: 'highest_risk',
+    label: 'Highest risk first',
+  },
+  {
+    value: 'newest',
+    label: 'Newest first',
+  },
+  {
+    value: 'lowest_risk',
+    label: 'Lowest risk first',
+  },
+  {
+    value: 'oldest',
+    label: 'Oldest first',
+  },
+];
 
 class ArticleFeedQueryServiceError extends Error {
   constructor(code, message) {
@@ -81,6 +102,14 @@ function normalizeTimestamp(value, fieldName) {
     return null;
   }
 
+  if (DATE_ONLY_PATTERN.test(normalizedValue)) {
+    if (fieldName === 'publishedTo') {
+      return `${normalizedValue}T23:59:59.999Z`;
+    }
+
+    return `${normalizedValue}T00:00:00.000Z`;
+  }
+
   const timestamp = Date.parse(normalizedValue);
 
   if (Number.isNaN(timestamp)) {
@@ -103,10 +132,28 @@ function normalizePublisher(value) {
   return normalizedValue.toLowerCase();
 }
 
+function normalizeDateInputValue(value) {
+  if (typeof value !== 'string' || !value) {
+    return '';
+  }
+
+  return value.slice(0, 10);
+}
+
+function getWorkspace(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT id, slug, name
+      FROM workspace
+      WHERE id = ?
+    `)
+    .get(workspaceId);
+}
+
 function getMembership(db, workspaceId, userId) {
   return db
     .prepare(`
-      SELECT id, status
+      SELECT id, role, status
       FROM workspace_membership
       WHERE workspace_id = ? AND user_id = ?
     `)
@@ -124,6 +171,72 @@ function requireActiveWorkspaceMember(db, workspaceId, userId) {
   }
 
   return membership;
+}
+
+function listMonitoringTargets(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT
+        id,
+        type,
+        display_name,
+        status
+      FROM monitoring_target
+      WHERE workspace_id = ?
+      ORDER BY
+        CASE status
+          WHEN 'active' THEN 0
+          WHEN 'awaiting_activation' THEN 1
+          WHEN 'ready_for_review' THEN 2
+          ELSE 3
+        END,
+        display_name COLLATE NOCASE,
+        id
+    `)
+    .all(workspaceId)
+    .map((row) => ({
+      id: row.id,
+      type: row.type,
+      displayName: row.display_name,
+      status: row.status,
+    }));
+}
+
+function listTopicOptions(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT
+        LOWER(TRIM(topic_label)) AS normalized_topic_label,
+        MIN(TRIM(topic_label)) AS topic_label
+      FROM article_analysis_topic_label
+      WHERE workspace_id = ?
+        AND topic_label IS NOT NULL
+        AND TRIM(topic_label) <> ''
+      GROUP BY LOWER(TRIM(topic_label))
+      ORDER BY normalized_topic_label, topic_label
+    `)
+    .all(workspaceId)
+    .map((row) => row.topic_label);
+}
+
+function listPublisherOptions(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT
+        LOWER(TRIM(article_content.publisher_name)) AS normalized_publisher_name,
+        MIN(TRIM(article_content.publisher_name)) AS publisher_name
+      FROM article_content
+      INNER JOIN article_analysis
+        ON article_analysis.workspace_id = article_content.workspace_id
+       AND article_analysis.article_id = article_content.article_id
+      WHERE article_content.workspace_id = ?
+        AND article_content.publisher_name IS NOT NULL
+        AND TRIM(article_content.publisher_name) <> ''
+      GROUP BY LOWER(TRIM(article_content.publisher_name))
+      ORDER BY normalized_publisher_name, publisher_name
+    `)
+    .all(workspaceId)
+    .map((row) => row.publisher_name);
 }
 
 function parseTopicLabels(value) {
@@ -206,43 +319,48 @@ function getSortOrderBy(sort) {
   }
 }
 
-function listArticleFeed(options) {
-  const normalizedWorkspaceId = normalizeRequiredString(options.workspaceId, 'workspaceId');
-  const normalizedUserId = normalizeRequiredString(options.userId, 'userId');
-  const normalizedMonitoringTargetId = normalizeOptionalString(
-    options.monitoringTargetId,
-    'monitoringTargetId',
-  );
-  const normalizedRiskBand = normalizeRiskBand(options.riskBand);
-  const normalizedTopicLabel = normalizeOptionalString(options.topicLabel, 'topicLabel');
-  const normalizedPublisher = normalizePublisher(options.publisher);
-  const publishedFrom = normalizeTimestamp(options.publishedFrom, 'publishedFrom');
-  const publishedTo = normalizeTimestamp(options.publishedTo, 'publishedTo');
-  const normalizedSort = normalizeSort(options.sort);
+function normalizeArticleFeedFilters(options) {
+  const normalizedFilters = {
+    workspaceId: normalizeRequiredString(options.workspaceId, 'workspaceId'),
+    userId: normalizeRequiredString(options.userId, 'userId'),
+    monitoringTargetId: normalizeOptionalString(options.monitoringTargetId, 'monitoringTargetId'),
+    riskBand: normalizeRiskBand(options.riskBand),
+    topicLabel: normalizeOptionalString(options.topicLabel, 'topicLabel'),
+    publisher: normalizePublisher(options.publisher),
+    publishedFrom: normalizeTimestamp(options.publishedFrom, 'publishedFrom'),
+    publishedTo: normalizeTimestamp(options.publishedTo, 'publishedTo'),
+    sort: normalizeSort(options.sort),
+  };
 
-  if (publishedFrom && publishedTo && publishedFrom > publishedTo) {
+  if (
+    normalizedFilters.publishedFrom &&
+    normalizedFilters.publishedTo &&
+    normalizedFilters.publishedFrom > normalizedFilters.publishedTo
+  ) {
     throw new ArticleFeedQueryServiceError(
       'INVALID_INPUT',
       'publishedFrom must be earlier than or equal to publishedTo',
     );
   }
 
-  requireActiveWorkspaceMember(options.db, normalizedWorkspaceId, normalizedUserId);
+  return normalizedFilters;
+}
 
+function queryArticleFeedRows(db, filters) {
   const whereClauses = ['article_analysis.workspace_id = ?'];
-  const queryParameters = [normalizedWorkspaceId];
+  const queryParameters = [filters.workspaceId];
 
-  if (normalizedMonitoringTargetId) {
+  if (filters.monitoringTargetId) {
     whereClauses.push('article_analysis.monitoring_target_id = ?');
-    queryParameters.push(normalizedMonitoringTargetId);
+    queryParameters.push(filters.monitoringTargetId);
   }
 
-  if (normalizedRiskBand) {
+  if (filters.riskBand) {
     whereClauses.push('article_analysis.risk_band = ?');
-    queryParameters.push(normalizedRiskBand);
+    queryParameters.push(filters.riskBand);
   }
 
-  if (normalizedTopicLabel) {
+  if (filters.topicLabel) {
     whereClauses.push(`
       EXISTS (
         SELECT 1
@@ -252,27 +370,27 @@ function listArticleFeed(options) {
           AND topic_filter.topic_label = ?
       )
     `);
-    queryParameters.push(normalizedTopicLabel);
+    queryParameters.push(filters.topicLabel);
   }
 
-  if (normalizedPublisher) {
+  if (filters.publisher) {
     whereClauses.push('LOWER(TRIM(article_content.publisher_name)) = ?');
-    queryParameters.push(normalizedPublisher);
+    queryParameters.push(filters.publisher);
   }
 
-  if (publishedFrom) {
+  if (filters.publishedFrom) {
     whereClauses.push('article_content.published_at IS NOT NULL');
     whereClauses.push('article_content.published_at >= ?');
-    queryParameters.push(publishedFrom);
+    queryParameters.push(filters.publishedFrom);
   }
 
-  if (publishedTo) {
+  if (filters.publishedTo) {
     whereClauses.push('article_content.published_at IS NOT NULL');
     whereClauses.push('article_content.published_at <= ?');
-    queryParameters.push(publishedTo);
+    queryParameters.push(filters.publishedTo);
   }
 
-  const rows = options.db
+  const rows = db
     .prepare(`
       SELECT
         article_analysis.id AS article_analysis_id,
@@ -297,15 +415,82 @@ function listArticleFeed(options) {
         ON article_content.workspace_id = article_analysis.workspace_id
        AND article_content.article_id = article_analysis.article_id
       WHERE ${whereClauses.join('\n        AND ')}
-      ORDER BY ${getSortOrderBy(normalizedSort)}
+      ORDER BY ${getSortOrderBy(filters.sort)}
     `)
     .all(...queryParameters);
 
   return rows.map(toArticleFeedRecord);
 }
 
+function listArticleFeed(options) {
+  const normalizedFilters = normalizeArticleFeedFilters(options);
+
+  requireActiveWorkspaceMember(
+    options.db,
+    normalizedFilters.workspaceId,
+    normalizedFilters.userId,
+  );
+
+  return queryArticleFeedRows(options.db, normalizedFilters);
+}
+
+function getArticleDashboardPage(options) {
+  const normalizedFilters = normalizeArticleFeedFilters(options);
+  const workspace = getWorkspace(options.db, normalizedFilters.workspaceId);
+
+  if (!workspace) {
+    throw new ArticleFeedQueryServiceError('WORKSPACE_NOT_FOUND', 'Workspace does not exist');
+  }
+
+  const membership = requireActiveWorkspaceMember(
+    options.db,
+    normalizedFilters.workspaceId,
+    normalizedFilters.userId,
+  );
+
+  return {
+    workspace: {
+      id: workspace.id,
+      slug: workspace.slug,
+      name: workspace.name,
+    },
+    viewer: {
+      userId: normalizedFilters.userId,
+      membershipId: membership.id,
+      role: membership.role,
+    },
+    filters: {
+      values: {
+        monitoringTargetId: normalizedFilters.monitoringTargetId ?? '',
+        riskBand: normalizedFilters.riskBand ?? '',
+        topicLabel: normalizedFilters.topicLabel ?? '',
+        publisher: options.publisher == null ? '' : String(options.publisher).trim(),
+        publishedFrom: normalizeDateInputValue(options.publishedFrom),
+        publishedTo: normalizeDateInputValue(options.publishedTo),
+        sort: normalizedFilters.sort,
+      },
+      options: {
+        monitoringTargets: listMonitoringTargets(options.db, normalizedFilters.workspaceId),
+        riskBands: articleAnalysisRiskBands.map((riskBand) => ({
+          value: riskBand,
+          label: `${riskBand[0].toUpperCase()}${riskBand.slice(1)} risk`,
+        })),
+        topics: listTopicOptions(options.db, normalizedFilters.workspaceId),
+        publishers: listPublisherOptions(options.db, normalizedFilters.workspaceId),
+        sorts: articleDashboardSortOptions.map((sortOption) => ({ ...sortOption })),
+      },
+    },
+    articles: queryArticleFeedRows(options.db, normalizedFilters),
+    liveRefresh: {
+      intervalMs: articleDashboardLiveRefreshIntervalMs,
+    },
+  };
+}
+
 module.exports = {
   ArticleFeedQueryServiceError,
+  articleDashboardLiveRefreshIntervalMs,
   articleFeedSorts,
+  getArticleDashboardPage,
   listArticleFeed,
 };

@@ -10,6 +10,9 @@ const {
   resolveEffectiveAlertPolicy,
   saveWorkspaceAlertPolicy,
 } = require('../src/backend/alert-policy-service.cjs');
+const {
+  completedArticleIngestionStatus,
+} = require('../src/db/schema/article-ingestion.cjs');
 const { createWorkspace } = require('../src/backend/workspace-service.cjs');
 const {
   getMonitoringTargetCollectorInput,
@@ -62,6 +65,140 @@ function insertMonitoringTarget(
     )
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(id, workspaceId, type, displayName, note, status, defaultRiskThreshold);
+}
+
+function insertArticle(
+  db,
+  {
+    id,
+    workspaceId,
+    sourceUrl,
+    canonicalUrl = null,
+    ingestionStatus = completedArticleIngestionStatus,
+  },
+) {
+  db.prepare(`
+    INSERT INTO article (
+      id,
+      workspace_id,
+      source_url,
+      canonical_url,
+      ingestion_status
+    )
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, workspaceId, sourceUrl, canonicalUrl, ingestionStatus);
+}
+
+function insertArticleContent(
+  db,
+  {
+    articleId,
+    workspaceId,
+    title,
+    bodyText = 'Article body',
+    authorName,
+    publisherName,
+    publishedAt,
+    fetchedAt = '2026-04-02T02:00:00.000Z',
+  },
+) {
+  db.prepare(`
+    INSERT INTO article_content (
+      article_id,
+      workspace_id,
+      title,
+      body_text,
+      author_name,
+      publisher_name,
+      published_at,
+      fetched_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    articleId,
+    workspaceId,
+    title,
+    bodyText,
+    authorName,
+    publisherName,
+    publishedAt,
+    fetchedAt,
+  );
+}
+
+function insertArticleAnalysis(
+  db,
+  {
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    relevanceScore = 0.94,
+    topicLabels = [],
+    summary = null,
+    riskScore,
+    riskBand,
+    rationale,
+    modelVersion = 'gpt-5.4',
+    relevanceScoredAt = '2026-04-02T02:01:00.000Z',
+    topicsClassifiedAt = '2026-04-02T02:02:00.000Z',
+    summaryGeneratedAt = '2026-04-02T02:03:00.000Z',
+    riskScoredAt = '2026-04-02T02:04:00.000Z',
+    createdAt = '2026-04-02T02:01:00.000Z',
+    updatedAt = '2026-04-02T02:04:00.000Z',
+  },
+) {
+  db.prepare(`
+    INSERT INTO article_analysis (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      article_id,
+      relevance_score,
+      topic_labels,
+      summary,
+      risk_score,
+      risk_band,
+      rationale,
+      model_version,
+      relevance_scored_at,
+      topics_classified_at,
+      summary_generated_at,
+      risk_scored_at,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    workspaceId,
+    monitoringTargetId,
+    articleId,
+    relevanceScore,
+    JSON.stringify(topicLabels),
+    summary,
+    riskScore,
+    riskBand,
+    rationale,
+    modelVersion,
+    relevanceScoredAt,
+    topicsClassifiedAt,
+    summaryGeneratedAt,
+    riskScoredAt,
+    createdAt,
+    updatedAt,
+  );
+}
+
+function insertTopicLabel(db, { workspaceId, articleAnalysisId, topicLabel }) {
+  db.prepare(`
+    INSERT INTO article_analysis_topic_label (
+      workspace_id,
+      article_analysis_id,
+      topic_label
+    )
+    VALUES (?, ?, ?)
+  `).run(workspaceId, articleAnalysisId, topicLabel);
 }
 
 function insertKeyword(
@@ -285,6 +422,125 @@ function seedReviewReadyTarget(db) {
         ],
       },
     ],
+  });
+}
+
+function seedArticleDashboardData(db) {
+  insertMonitoringTarget(db, {
+    id: 'target-dashboard-acme',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+    status: 'active',
+    defaultRiskThreshold: 83,
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-dashboard-jane',
+    workspaceId: 'workspace-1',
+    type: 'person',
+    displayName: 'Jane Doe',
+    status: 'active',
+    defaultRiskThreshold: 78,
+  });
+
+  insertArticle(db, {
+    id: 'article-dashboard-1',
+    workspaceId: 'workspace-1',
+    sourceUrl: 'https://example.com/acme-governance',
+    canonicalUrl: 'https://example.com/acme-governance',
+  });
+  insertArticleContent(db, {
+    articleId: 'article-dashboard-1',
+    workspaceId: 'workspace-1',
+    title: 'Acme faces governance investigation after whistleblower filing',
+    authorName: 'Naomi Park',
+    publisherName: 'Financial Dispatch',
+    publishedAt: '2026-04-02T02:45:00.000Z',
+  });
+  insertArticleAnalysis(db, {
+    id: 'analysis-dashboard-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-dashboard-acme',
+    articleId: 'article-dashboard-1',
+    topicLabels: ['governance', 'legal'],
+    summary: 'Governance concerns intensified after the filing reached regulators.',
+    riskScore: 92,
+    riskBand: 'high',
+    rationale: 'A whistleblower-backed probe can materially escalate regulatory risk.',
+    updatedAt: '2026-04-02T02:51:00.000Z',
+  });
+  insertTopicLabel(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-1',
+    topicLabel: 'governance',
+  });
+  insertTopicLabel(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-1',
+    topicLabel: 'legal',
+  });
+
+  insertArticle(db, {
+    id: 'article-dashboard-2',
+    workspaceId: 'workspace-1',
+    sourceUrl: 'https://example.com/acme-recall',
+    canonicalUrl: 'https://example.com/acme-recall',
+  });
+  insertArticleContent(db, {
+    articleId: 'article-dashboard-2',
+    workspaceId: 'workspace-1',
+    title: 'Acme expands recall to a second product line',
+    authorName: 'Owen Choi',
+    publisherName: 'Daily Ledger',
+    publishedAt: '2026-04-02T01:40:00.000Z',
+  });
+  insertArticleAnalysis(db, {
+    id: 'analysis-dashboard-2',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-dashboard-acme',
+    articleId: 'article-dashboard-2',
+    topicLabels: ['operations'],
+    summary: 'The recall widened and raised questions about production oversight.',
+    riskScore: 68,
+    riskBand: 'medium',
+    rationale: 'Operational disruption remains material, but the issue is still bounded.',
+    updatedAt: '2026-04-02T01:46:00.000Z',
+  });
+  insertTopicLabel(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-2',
+    topicLabel: 'operations',
+  });
+
+  insertArticle(db, {
+    id: 'article-dashboard-3',
+    workspaceId: 'workspace-1',
+    sourceUrl: 'https://example.com/jane-doe-townhall',
+    canonicalUrl: 'https://example.com/jane-doe-townhall',
+  });
+  insertArticleContent(db, {
+    articleId: 'article-dashboard-3',
+    workspaceId: 'workspace-1',
+    title: 'Jane Doe outlines a cautious hiring plan in town hall remarks',
+    authorName: 'Mina Han',
+    publisherName: 'financial dispatch',
+    publishedAt: '2026-04-01T22:20:00.000Z',
+  });
+  insertArticleAnalysis(db, {
+    id: 'analysis-dashboard-3',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-dashboard-jane',
+    articleId: 'article-dashboard-3',
+    topicLabels: ['people'],
+    summary: 'Leadership messaging stayed measured and low risk.',
+    riskScore: 24,
+    riskBand: 'low',
+    rationale: 'The remarks are routine and do not indicate immediate downside.',
+    updatedAt: '2026-04-01T22:29:00.000Z',
+  });
+  insertTopicLabel(db, {
+    workspaceId: 'workspace-1',
+    articleAnalysisId: 'analysis-dashboard-3',
+    topicLabel: 'people',
   });
 }
 
@@ -1190,6 +1446,97 @@ test('alert settings page saves workspace defaults and target overrides with eff
     assert.match(reloadedPage.body, /value="91"/u);
     assert.match(reloadedPage.body, /owner@example\.com/u);
     assert.match(reloadedPage.body, /\+12025550111/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('article dashboard page renders live feed cards, filters, and polling script for active workspace members', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedArticleDashboardData(db);
+  const server = await startServer(db);
+
+  try {
+    const response = await request(server, {
+      path: '/workspaces/workspace-1/articles?userId=user-member',
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /Track incoming risk coverage without leaving the feed\./u);
+    assert.match(response.body, /name="monitoringTargetId"/u);
+    assert.match(response.body, /name="riskBand"/u);
+    assert.match(response.body, /name="topicLabel"/u);
+    assert.match(response.body, /name="publisher"/u);
+    assert.match(response.body, /name="publishedFrom"/u);
+    assert.match(response.body, /name="publishedTo"/u);
+    assert.match(response.body, /value="highest_risk"/u);
+    assert.match(response.body, /value="newest"/u);
+    assert.match(response.body, /Acme faces governance investigation after whistleblower filing/u);
+    assert.match(response.body, /Acme expands recall to a second product line/u);
+    assert.match(response.body, /Jane Doe outlines a cautious hiring plan in town hall remarks/u);
+    assert.match(response.body, /Financial Dispatch/u);
+    assert.match(response.body, /Naomi Park/u);
+    assert.match(response.body, /data-live-results/u);
+    assert.match(response.body, /window\.__articleDashboardRefreshCount/u);
+    assert.match(response.body, /polls the server without reloading the page/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('article dashboard applies filters and serves fragment refresh responses', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedArticleDashboardData(db);
+  const server = await startServer(db);
+
+  try {
+    const filteredPage = await request(server, {
+      path: '/workspaces/workspace-1/articles?userId=user-member&monitoringTargetId=target-dashboard-acme&riskBand=high&topicLabel=governance&publisher=financial+dispatch&publishedFrom=2026-04-02&publishedTo=2026-04-02&sort=newest',
+    });
+
+    assert.equal(filteredPage.statusCode, 200);
+    assert.match(filteredPage.body, /Acme faces governance investigation after whistleblower filing/u);
+    assert.doesNotMatch(filteredPage.body, /Acme expands recall to a second product line/u);
+    assert.doesNotMatch(filteredPage.body, /Jane Doe outlines a cautious hiring plan in town hall remarks/u);
+    assert.match(filteredPage.body, /<option value="target-dashboard-acme" selected>/u);
+    assert.match(filteredPage.body, /<option value="high" selected>/u);
+    assert.match(filteredPage.body, /value="financial dispatch"/u);
+    assert.match(filteredPage.body, /value="2026-04-02"/u);
+
+    const fragmentResponse = await request(server, {
+      path: '/workspaces/workspace-1/articles?userId=user-member&monitoringTargetId=target-dashboard-acme&riskBand=high&fragment=results',
+    });
+
+    assert.equal(fragmentResponse.statusCode, 200);
+    assert.doesNotMatch(fragmentResponse.body, /<!doctype html>/u);
+    assert.match(fragmentResponse.body, /results-summary/u);
+    assert.match(fragmentResponse.body, /analysis-dashboard-1/u);
+  } finally {
+    await closeServer(server);
+    db.close();
+  }
+});
+
+test('article dashboard rejects invalid filter input', async () => {
+  const db = createDatabase();
+  seedWorkspace(db);
+  seedArticleDashboardData(db);
+  const server = await startServer(db);
+
+  try {
+    const response = await request(server, {
+      path: '/workspaces/workspace-1/articles?userId=user-member&sort=priority',
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(
+      response.body,
+      'sort must be one of: highest_risk, lowest_risk, newest, oldest',
+    );
   } finally {
     await closeServer(server);
     db.close();
