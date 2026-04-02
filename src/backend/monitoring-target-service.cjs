@@ -198,17 +198,27 @@ function runInTransaction(db, callback) {
 function getMembership(db, workspaceId, userId) {
   return db
     .prepare(`
-      SELECT id, status
+      SELECT id, role, status
       FROM workspace_membership
       WHERE workspace_id = ? AND user_id = ?
     `)
     .get(workspaceId, userId);
 }
 
+function getWorkspace(db, workspaceId) {
+  return db
+    .prepare(`
+      SELECT id, slug, name
+      FROM workspace
+      WHERE id = ?
+    `)
+    .get(workspaceId);
+}
+
 function getMonitoringTarget(db, workspaceId, monitoringTargetId) {
   return db
     .prepare(`
-      SELECT id, workspace_id, status
+      SELECT id, workspace_id, type, display_name, note, status, default_risk_threshold
       FROM monitoring_target
       WHERE workspace_id = ? AND id = ?
     `)
@@ -298,6 +308,117 @@ function normalizeTargetKeywordRow(targetKeyword) {
     sourceType: targetKeyword.source_type,
     isActive: targetKeyword.is_active,
     displayOrder: targetKeyword.display_order,
+  };
+}
+
+function getMonitoringTargetRegistrationPage({
+  db,
+  workspaceId,
+  userId,
+}) {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, 'workspaceId');
+  const normalizedUserId = normalizeRequiredString(userId, 'userId');
+  const workspace = getWorkspace(db, normalizedWorkspaceId);
+
+  if (!workspace) {
+    throw new MonitoringTargetServiceError('WORKSPACE_NOT_FOUND', 'Workspace does not exist');
+  }
+
+  const membership = getMembership(db, normalizedWorkspaceId, normalizedUserId);
+
+  if (!membership || membership.status !== ACTIVE_MEMBERSHIP_STATUS) {
+    throw new MonitoringTargetServiceError(
+      'WORKSPACE_MEMBER_FORBIDDEN',
+      'Only active workspace members can create monitoring targets',
+    );
+  }
+
+  return {
+    workspace: {
+      id: workspace.id,
+      slug: workspace.slug,
+      name: workspace.name,
+    },
+    viewer: {
+      userId: normalizedUserId,
+      membershipId: membership.id,
+      role: membership.role,
+    },
+    defaults: {
+      type: monitoringTargetTypes[0],
+      defaultRiskThreshold: defaultMonitoringTargetRiskThreshold,
+    },
+    availableTargetTypes: [...monitoringTargetTypes],
+  };
+}
+
+function getMonitoringTargetReviewWorkflow({
+  db,
+  workspaceId,
+  monitoringTargetId,
+  userId,
+}) {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, 'workspaceId');
+  const normalizedMonitoringTargetId = normalizeRequiredString(
+    monitoringTargetId,
+    'monitoringTargetId',
+  );
+  const normalizedUserId = normalizeRequiredString(userId, 'userId');
+  const workspace = getWorkspace(db, normalizedWorkspaceId);
+
+  if (!workspace) {
+    throw new MonitoringTargetServiceError('WORKSPACE_NOT_FOUND', 'Workspace does not exist');
+  }
+
+  const membership = getMembership(db, normalizedWorkspaceId, normalizedUserId);
+
+  if (!membership || membership.status !== ACTIVE_MEMBERSHIP_STATUS) {
+    throw new MonitoringTargetServiceError(
+      'WORKSPACE_MEMBER_FORBIDDEN',
+      'Only active workspace members can view monitoring target review',
+    );
+  }
+
+  const monitoringTarget = getMonitoringTarget(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+
+  if (!monitoringTarget) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_NOT_FOUND',
+      'Monitoring target does not exist in the workspace',
+    );
+  }
+
+  const seedKeywords = listTargetKeywordsBySource(
+    db,
+    normalizedMonitoringTargetId,
+    seedTargetKeywordSourceType,
+  ).map(normalizeTargetKeywordRow);
+
+  return {
+    workspace: {
+      id: workspace.id,
+      slug: workspace.slug,
+      name: workspace.name,
+    },
+    viewer: {
+      userId: normalizedUserId,
+      membershipId: membership.id,
+      role: membership.role,
+    },
+    monitoringTarget: {
+      id: monitoringTarget.id,
+      workspaceId: monitoringTarget.workspace_id,
+      type: monitoringTarget.type,
+      displayName: monitoringTarget.display_name,
+      note: monitoringTarget.note,
+      status: monitoringTarget.status,
+      defaultRiskThreshold: monitoringTarget.default_risk_threshold,
+      seedKeywords,
+    },
   };
 }
 
@@ -1017,6 +1138,8 @@ module.exports = {
   createMonitoringTarget,
   disableTargetKeyword,
   getMonitoringTargetCollectorInput,
+  getMonitoringTargetRegistrationPage,
+  getMonitoringTargetReviewWorkflow,
   removeTargetKeyword,
   reorderTargetKeywords,
   saveMonitoringTargetReviewDecision,

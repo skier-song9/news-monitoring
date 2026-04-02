@@ -8,6 +8,7 @@
     "typecheck": "node scripts/verify-workspace-schema.cjs",
     "test": "node --test",
     "check": "npm run lint && npm run typecheck && npm test",
-    "members-demo": "node scripts/workspace-members-demo.cjs"
+    "members-demo": "node scripts/workspace-members-demo.cjs",
+    "target-registration-demo": "node scripts/monitoring-target-registration-demo.cjs"
   }
 }
