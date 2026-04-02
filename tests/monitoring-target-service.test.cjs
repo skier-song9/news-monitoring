@@ -126,6 +126,46 @@ function insertReview(
   );
 }
 
+function insertProfile(
+  db,
+  {
+    id,
+    workspaceId,
+    monitoringTargetId,
+    summary = 'Generated profile summary',
+    relatedEntities = [],
+    aliases = [],
+    searchResults = [],
+    modelVersion = 'gpt-test-1',
+    generatedAt = '2026-03-30T12:00:00.000Z',
+  },
+) {
+  db.prepare(`
+    INSERT INTO monitoring_target_profile (
+      id,
+      workspace_id,
+      monitoring_target_id,
+      summary,
+      related_entities_json,
+      aliases_json,
+      search_results_json,
+      model_version,
+      generated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    workspaceId,
+    monitoringTargetId,
+    summary,
+    JSON.stringify(relatedEntities),
+    JSON.stringify(aliases),
+    JSON.stringify(searchResults),
+    modelVersion,
+    generatedAt,
+  );
+}
+
 function insertTargetKeyword(
   db,
   {
@@ -920,6 +960,11 @@ test('saveMonitoringTargetReviewDecision persists a match review and leaves the 
     displayName: 'Acme Holdings',
     status: monitoringTargetReadyForReviewStatus,
   });
+  insertProfile(db, {
+    id: 'profile-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+  });
 
   const review = saveMonitoringTargetReviewDecision({
     db,
@@ -970,6 +1015,50 @@ test('saveMonitoringTargetReviewDecision persists a match review and leaves the 
   db.close();
 });
 
+test('saveMonitoringTargetReviewDecision requires a generated profile before saving review state', () => {
+  const db = createDatabase();
+
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+    status: monitoringTargetReadyForReviewStatus,
+  });
+
+  assert.throws(
+    () =>
+      saveMonitoringTargetReviewDecision({
+        db,
+        workspaceId: 'workspace-1',
+        monitoringTargetId: 'target-1',
+        userId: 'user-1',
+        decision: monitoringTargetMatchReviewDecision,
+      }),
+    (error) => {
+      assert.ok(error instanceof MonitoringTargetServiceError);
+      assert.equal(error.code, 'MONITORING_TARGET_PROFILE_REQUIRED');
+      return true;
+    },
+  );
+
+  db.close();
+});
+
 test('saveMonitoringTargetReviewDecision reopens a mismatched target for keyword editing', () => {
   const db = createDatabase();
 
@@ -1001,6 +1090,11 @@ test('saveMonitoringTargetReviewDecision reopens a mismatched target for keyword
     reviewDecision: monitoringTargetPartialMatchReviewDecision,
     reviewedByMembershipId: 'membership-1',
     reviewedAt: '2026-03-30T12:00:00.000Z',
+  });
+  insertProfile(db, {
+    id: 'profile-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
   });
 
   const review = saveMonitoringTargetReviewDecision({
@@ -1083,6 +1177,11 @@ test('activateMonitoringTarget records activation separately from review approva
     reviewedByMembershipId: 'membership-1',
     reviewedAt: '2026-03-30T12:00:00.000Z',
   });
+  insertProfile(db, {
+    id: 'profile-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+  });
 
   const activation = activateMonitoringTarget({
     db,
@@ -1128,6 +1227,57 @@ test('activateMonitoringTarget records activation separately from review approva
   db.close();
 });
 
+test('activateMonitoringTarget requires a generated profile before activation', () => {
+  const db = createDatabase();
+
+  insertUser(db, {
+    id: 'user-1',
+    email: 'owner@example.com',
+    displayName: 'Owner',
+  });
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme-risk',
+    name: 'Acme Risk Desk',
+  });
+  insertMembership(db, {
+    id: 'membership-1',
+    workspaceId: 'workspace-1',
+    userId: 'user-1',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+    status: monitoringTargetAwaitingActivationStatus,
+  });
+  insertReview(db, {
+    id: 'review-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
+    reviewDecision: monitoringTargetPartialMatchReviewDecision,
+    reviewedByMembershipId: 'membership-1',
+    reviewedAt: '2026-03-30T12:00:00.000Z',
+  });
+
+  assert.throws(
+    () =>
+      activateMonitoringTarget({
+        db,
+        workspaceId: 'workspace-1',
+        monitoringTargetId: 'target-1',
+        userId: 'user-1',
+      }),
+    (error) => {
+      assert.ok(error instanceof MonitoringTargetServiceError);
+      assert.equal(error.code, 'MONITORING_TARGET_PROFILE_REQUIRED');
+      return true;
+    },
+  );
+
+  db.close();
+});
+
 test('activateMonitoringTarget rejects targets without an approval review decision', () => {
   const db = createDatabase();
 
@@ -1159,6 +1309,11 @@ test('activateMonitoringTarget rejects targets without an approval review decisi
     reviewDecision: monitoringTargetMismatchReviewDecision,
     reviewedByMembershipId: 'membership-1',
     reviewedAt: '2026-03-30T12:00:00.000Z',
+  });
+  insertProfile(db, {
+    id: 'profile-1',
+    workspaceId: 'workspace-1',
+    monitoringTargetId: 'target-1',
   });
 
   assert.throws(

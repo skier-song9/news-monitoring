@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const { URL } = require('node:url');
 
 const {
   defaultMonitoringTargetStatus,
@@ -81,6 +82,29 @@ function normalizeStringArray(value, fieldName) {
   return normalizedValues;
 }
 
+function normalizeSearchResultUrl(value, fieldName) {
+  const normalizedValue = normalizeRequiredString(value, fieldName);
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(normalizedValue);
+  } catch {
+    throw new MonitoringTargetDiscoveryJobError(
+      'INVALID_INPUT',
+      `${fieldName} must be a valid absolute URL`,
+    );
+  }
+
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new MonitoringTargetDiscoveryJobError(
+      'INVALID_INPUT',
+      `${fieldName} must use http or https`,
+    );
+  }
+
+  return normalizedValue;
+}
+
 function normalizeSearchResult(result, fieldName) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     throw new MonitoringTargetDiscoveryJobError('INVALID_INPUT', `${fieldName} must be an object`);
@@ -88,7 +112,7 @@ function normalizeSearchResult(result, fieldName) {
 
   return {
     title: normalizeRequiredString(result.title, `${fieldName}.title`),
-    url: normalizeRequiredString(result.url, `${fieldName}.url`),
+    url: normalizeSearchResultUrl(result.url, `${fieldName}.url`),
     snippet: normalizeOptionalString(result.snippet, `${fieldName}.snippet`),
     source: normalizeOptionalString(result.source, `${fieldName}.source`),
   };
@@ -196,6 +220,28 @@ function updateMonitoringTargetStatus(db, monitoringTargetId, status, updatedAt)
   `).run(status, updatedAt, monitoringTargetId);
 }
 
+function restoreMonitoringTargetStatusIfUnchanged(
+  db,
+  monitoringTargetId,
+  previousStatus,
+  expectedUpdatedAt,
+  restoredAt,
+) {
+  db.prepare(`
+    UPDATE monitoring_target
+    SET status = ?, updated_at = ?
+    WHERE id = ?
+      AND status = ?
+      AND updated_at = ?
+  `).run(
+    previousStatus,
+    restoredAt,
+    monitoringTargetId,
+    monitoringTargetProfileInProgressStatus,
+    expectedUpdatedAt,
+  );
+}
+
 function clearMonitoringTargetReview(db, workspaceId, monitoringTargetId) {
   db.prepare(`
     DELETE FROM monitoring_target_review
@@ -269,150 +315,161 @@ async function runMonitoringTargetDiscoveryJob({
     keyword: seedKeyword.keyword,
   }));
 
+  const inProgressAt = now();
   updateMonitoringTargetStatus(
     db,
     normalizedMonitoringTargetId,
     monitoringTargetProfileInProgressStatus,
-    now(),
+    inProgressAt,
   );
+  try {
+    const searchResults = [];
 
-  const searchResults = [];
+    for (const seedKeyword of seedKeywords) {
+      const results = await searchWeb({
+        monitoringTarget: normalizedMonitoringTarget,
+        keyword: seedKeyword.keyword,
+        seedKeyword,
+      });
 
-  for (const seedKeyword of seedKeywords) {
-    const results = await searchWeb({
-      monitoringTarget: normalizedMonitoringTarget,
-      keyword: seedKeyword.keyword,
-      seedKeyword,
-    });
+      searchResults.push({
+        keyword: seedKeyword.keyword,
+        results: normalizeSearchResults(results, seedKeyword.keyword),
+      });
+    }
 
-    searchResults.push({
-      keyword: seedKeyword.keyword,
-      results: normalizeSearchResults(results, seedKeyword.keyword),
-    });
-  }
-
-  const generatedProfile = normalizeGeneratedProfile(
-    await generateTargetProfile({
-      monitoringTarget: normalizedMonitoringTarget,
-      seedKeywords,
-      searchResults,
-    }),
-    seedKeywords.map((seedKeyword) => seedKeyword.keyword),
-  );
-
-  return runInTransaction(db, () => {
-    const persistedAt = now();
-    const existingProfile = getMonitoringTargetProfile(
-      db,
-      normalizedMonitoringTarget.workspaceId,
-      normalizedMonitoringTarget.id,
-    );
-    const profileId = existingProfile ? existingProfile.id : createId();
-
-    db.prepare(`
-      INSERT INTO monitoring_target_profile (
-        id,
-        workspace_id,
-        monitoring_target_id,
-        summary,
-        related_entities_json,
-        aliases_json,
-        search_results_json,
-        model_version,
-        generated_at,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (workspace_id, monitoring_target_id) DO UPDATE SET
-        summary = excluded.summary,
-        related_entities_json = excluded.related_entities_json,
-        aliases_json = excluded.aliases_json,
-        search_results_json = excluded.search_results_json,
-        model_version = excluded.model_version,
-        generated_at = excluded.generated_at,
-        updated_at = excluded.updated_at
-    `).run(
-      profileId,
-      normalizedMonitoringTarget.workspaceId,
-      normalizedMonitoringTarget.id,
-      generatedProfile.summary,
-      JSON.stringify(generatedProfile.relatedEntities),
-      JSON.stringify(generatedProfile.aliases),
-      JSON.stringify(searchResults),
-      generatedProfile.modelVersion,
-      persistedAt,
-      persistedAt,
-      persistedAt,
+    const generatedProfile = normalizeGeneratedProfile(
+      await generateTargetProfile({
+        monitoringTarget: normalizedMonitoringTarget,
+        seedKeywords,
+        searchResults,
+      }),
+      seedKeywords.map((seedKeyword) => seedKeyword.keyword),
     );
 
-    db.prepare(`
-      DELETE FROM target_keyword
-      WHERE monitoring_target_id = ? AND source_type = ?
-    `).run(normalizedMonitoringTarget.id, expandedTargetKeywordSourceType);
-
-    clearMonitoringTargetReview(
-      db,
-      normalizedMonitoringTarget.workspaceId,
-      normalizedMonitoringTarget.id,
-    );
-
-    const expandedKeywords = generatedProfile.expandedKeywords.map((keyword, displayOrder) => {
-      const keywordId = createId();
+    return runInTransaction(db, () => {
+      const persistedAt = now();
+      const existingProfile = getMonitoringTargetProfile(
+        db,
+        normalizedMonitoringTarget.workspaceId,
+        normalizedMonitoringTarget.id,
+      );
+      const profileId = existingProfile ? existingProfile.id : createId();
 
       db.prepare(`
-        INSERT INTO target_keyword (
+        INSERT INTO monitoring_target_profile (
           id,
+          workspace_id,
           monitoring_target_id,
-          keyword,
-          source_type,
-          is_active,
-          display_order,
+          summary,
+          related_entities_json,
+          aliases_json,
+          search_results_json,
+          model_version,
+          generated_at,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (workspace_id, monitoring_target_id) DO UPDATE SET
+          summary = excluded.summary,
+          related_entities_json = excluded.related_entities_json,
+          aliases_json = excluded.aliases_json,
+          search_results_json = excluded.search_results_json,
+          model_version = excluded.model_version,
+          generated_at = excluded.generated_at,
+          updated_at = excluded.updated_at
       `).run(
-        keywordId,
+        profileId,
+        normalizedMonitoringTarget.workspaceId,
         normalizedMonitoringTarget.id,
-        keyword,
-        expandedTargetKeywordSourceType,
-        defaultTargetKeywordIsActive,
-        displayOrder,
+        generatedProfile.summary,
+        JSON.stringify(generatedProfile.relatedEntities),
+        JSON.stringify(generatedProfile.aliases),
+        JSON.stringify(searchResults),
+        generatedProfile.modelVersion,
+        persistedAt,
         persistedAt,
         persistedAt,
       );
 
+      db.prepare(`
+        DELETE FROM target_keyword
+        WHERE monitoring_target_id = ? AND source_type = ?
+      `).run(normalizedMonitoringTarget.id, expandedTargetKeywordSourceType);
+
+      clearMonitoringTargetReview(
+        db,
+        normalizedMonitoringTarget.workspaceId,
+        normalizedMonitoringTarget.id,
+      );
+
+      const expandedKeywords = generatedProfile.expandedKeywords.map((keyword, displayOrder) => {
+        const keywordId = createId();
+
+        db.prepare(`
+          INSERT INTO target_keyword (
+            id,
+            monitoring_target_id,
+            keyword,
+            source_type,
+            is_active,
+            display_order,
+            created_at,
+            updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          keywordId,
+          normalizedMonitoringTarget.id,
+          keyword,
+          expandedTargetKeywordSourceType,
+          defaultTargetKeywordIsActive,
+          displayOrder,
+          persistedAt,
+          persistedAt,
+        );
+
+        return {
+          id: keywordId,
+          keyword,
+          sourceType: expandedTargetKeywordSourceType,
+          isActive: defaultTargetKeywordIsActive,
+          displayOrder,
+        };
+      });
+
+      updateMonitoringTargetStatus(
+        db,
+        normalizedMonitoringTarget.id,
+        monitoringTargetReadyForReviewStatus,
+        persistedAt,
+      );
+
       return {
-        id: keywordId,
-        keyword,
-        sourceType: expandedTargetKeywordSourceType,
-        isActive: defaultTargetKeywordIsActive,
-        displayOrder,
+        id: profileId,
+        workspaceId: normalizedMonitoringTarget.workspaceId,
+        monitoringTargetId: normalizedMonitoringTarget.id,
+        status: monitoringTargetReadyForReviewStatus,
+        summary: generatedProfile.summary,
+        relatedEntities: generatedProfile.relatedEntities,
+        aliases: generatedProfile.aliases,
+        searchResults,
+        expandedKeywords,
+        modelVersion: generatedProfile.modelVersion,
+        generatedAt: persistedAt,
       };
     });
-
-    updateMonitoringTargetStatus(
+  } catch (error) {
+    restoreMonitoringTargetStatusIfUnchanged(
       db,
-      normalizedMonitoringTarget.id,
-      monitoringTargetReadyForReviewStatus,
-      persistedAt,
+      normalizedMonitoringTargetId,
+      normalizedMonitoringTarget.status,
+      inProgressAt,
+      now(),
     );
-
-    return {
-      id: profileId,
-      workspaceId: normalizedMonitoringTarget.workspaceId,
-      monitoringTargetId: normalizedMonitoringTarget.id,
-      status: monitoringTargetReadyForReviewStatus,
-      summary: generatedProfile.summary,
-      relatedEntities: generatedProfile.relatedEntities,
-      aliases: generatedProfile.aliases,
-      searchResults,
-      expandedKeywords,
-      modelVersion: generatedProfile.modelVersion,
-      generatedAt: persistedAt,
-    };
-  });
+    throw error;
+  }
 }
 
 module.exports = {

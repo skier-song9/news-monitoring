@@ -225,6 +225,23 @@ function getMonitoringTarget(db, workspaceId, monitoringTargetId) {
     .get(workspaceId, monitoringTargetId);
 }
 
+function getMonitoringTargetProfile(db, workspaceId, monitoringTargetId) {
+  return db
+    .prepare(`
+      SELECT
+        id,
+        summary,
+        related_entities_json,
+        aliases_json,
+        search_results_json,
+        model_version,
+        generated_at
+      FROM monitoring_target_profile
+      WHERE workspace_id = ? AND monitoring_target_id = ?
+    `)
+    .get(workspaceId, monitoringTargetId);
+}
+
 function getMonitoringTargetReview(db, workspaceId, monitoringTargetId) {
   return db
     .prepare(`
@@ -309,6 +326,19 @@ function normalizeTargetKeywordRow(targetKeyword) {
     isActive: targetKeyword.is_active,
     displayOrder: targetKeyword.display_order,
   };
+}
+
+function parseStoredJsonArray(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return [];
+  }
+
+  try {
+    const parsedValue = JSON.parse(value);
+    return Array.isArray(parsedValue) ? parsedValue : [];
+  } catch {
+    return [];
+  }
 }
 
 function getMonitoringTargetRegistrationPage({
@@ -397,6 +427,48 @@ function getMonitoringTargetReviewWorkflow({
     normalizedMonitoringTargetId,
     seedTargetKeywordSourceType,
   ).map(normalizeTargetKeywordRow);
+  const expandedKeywords = listTargetKeywordsBySource(
+    db,
+    normalizedMonitoringTargetId,
+    expandedTargetKeywordSourceType,
+  ).map(normalizeTargetKeywordRow);
+  const profile = getMonitoringTargetProfile(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+  const review = getMonitoringTargetReview(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+  const reviewDecision = review?.review_decision ?? null;
+  const canSaveReviewDecision =
+    Boolean(profile) &&
+    (monitoringTarget.status === monitoringTargetReadyForReviewStatus ||
+      monitoringTarget.status === monitoringTargetAwaitingActivationStatus);
+  const canActivate =
+    Boolean(profile) &&
+    monitoringTarget.status === monitoringTargetAwaitingActivationStatus &&
+    (reviewDecision === monitoringTargetMatchReviewDecision ||
+      reviewDecision === monitoringTargetPartialMatchReviewDecision);
+  let activationBlockedReason = null;
+
+  if (monitoringTarget.status === activeMonitoringTargetStatus) {
+    activationBlockedReason = 'This monitoring target is already active.';
+  } else if (!profile) {
+    activationBlockedReason =
+      'A generated target profile is required before activation.';
+  } else if (!review) {
+    activationBlockedReason =
+      'Save a match or partial_match review decision to unlock activation.';
+  } else if (reviewDecision === monitoringTargetMismatchReviewDecision) {
+    activationBlockedReason =
+      'Mismatch keeps the target in keyword editing until discovery runs again.';
+  } else if (!canActivate) {
+    activationBlockedReason =
+      `Activation is unavailable while the target is ${monitoringTarget.status}.`;
+  }
 
   return {
     workspace: {
@@ -418,6 +490,34 @@ function getMonitoringTargetReviewWorkflow({
       status: monitoringTarget.status,
       defaultRiskThreshold: monitoringTarget.default_risk_threshold,
       seedKeywords,
+      expandedKeywords,
+    },
+    profile: profile
+      ? {
+          id: profile.id,
+          summary: profile.summary,
+          relatedEntities: parseStoredJsonArray(profile.related_entities_json),
+          aliases: parseStoredJsonArray(profile.aliases_json),
+          searchResults: parseStoredJsonArray(profile.search_results_json),
+          modelVersion: profile.model_version,
+          generatedAt: profile.generated_at,
+        }
+      : null,
+    review: review
+      ? {
+          id: review.id,
+          reviewDecision,
+          reviewedAt: review.reviewed_at,
+          activatedAt: review.activated_at,
+        }
+      : null,
+    reviewControls: {
+      canSaveDecision: canSaveReviewDecision,
+      availableDecisions: [...monitoringTargetReviewDecisions],
+    },
+    activation: {
+      canActivate,
+      blockedReason: activationBlockedReason,
     },
   };
 }
@@ -953,6 +1053,19 @@ function saveMonitoringTargetReviewDecision({
     );
   }
 
+  const profile = getMonitoringTargetProfile(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+
+  if (!profile) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_PROFILE_REQUIRED',
+      'A generated target profile is required before review decisions can be saved',
+    );
+  }
+
   if (
     monitoringTarget.status !== monitoringTargetReadyForReviewStatus &&
     monitoringTarget.status !== monitoringTargetAwaitingActivationStatus
@@ -1061,6 +1174,19 @@ function activateMonitoringTarget({
     throw new MonitoringTargetServiceError(
       'MONITORING_TARGET_NOT_FOUND',
       'Monitoring target does not exist in the workspace',
+    );
+  }
+
+  const profile = getMonitoringTargetProfile(
+    db,
+    normalizedWorkspaceId,
+    normalizedMonitoringTargetId,
+  );
+
+  if (!profile) {
+    throw new MonitoringTargetServiceError(
+      'MONITORING_TARGET_PROFILE_REQUIRED',
+      'A generated target profile is required before activation',
     );
   }
 

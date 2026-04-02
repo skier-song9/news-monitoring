@@ -4,6 +4,12 @@ const { createServer } = require('node:http');
 const { DatabaseSync } = require('node:sqlite');
 
 const { applyMigrations } = require('../src/db/migrations.cjs');
+const {
+  runMonitoringTargetDiscoveryJob,
+} = require('../src/backend/monitoring-target-discovery-job.cjs');
+const {
+  createMonitoringTarget,
+} = require('../src/backend/monitoring-target-service.cjs');
 const { createWorkspace } = require('../src/backend/workspace-service.cjs');
 const {
   createMonitoringTargetRegistrationApp,
@@ -69,6 +75,54 @@ function seedDemoData(db) {
   return workspace;
 }
 
+async function seedReviewDemoTarget(db, workspaceId) {
+  const target = createMonitoringTarget({
+    db,
+    workspaceId,
+    userId: 'user-owner',
+    type: 'company',
+    displayName: 'Acme Holdings',
+    note: 'Review this generated profile before activation.',
+    defaultRiskThreshold: 83,
+    seedKeywords: ['Acme Holdings', 'Acme founder'],
+    now: () => '2026-04-02T02:00:00.000Z',
+    createId: createIdGenerator(
+      'target-review-demo-1',
+      'seed-review-demo-1',
+      'seed-review-demo-2',
+    ),
+  });
+
+  await runMonitoringTargetDiscoveryJob({
+    db,
+    monitoringTargetId: target.id,
+    now: () => '2026-04-02T02:15:00.000Z',
+    createId: createIdGenerator(
+      'profile-review-demo-1',
+      'expanded-review-demo-1',
+      'expanded-review-demo-2',
+    ),
+    searchWeb: async ({ keyword }) => [
+      {
+        title: `${keyword} coverage signal`,
+        url: `https://news.example.com/${encodeURIComponent(keyword)}`,
+        snippet: `${keyword} appears in a recent risk signal.`,
+        source: 'Google News',
+      },
+    ],
+    generateTargetProfile: async () => ({
+      summary:
+        'Discovery results point to Acme Holdings, founder Jane Doe, and the Acme Labs subsidiary as the main identity signals.',
+      relatedEntities: ['Jane Doe', 'Acme Labs'],
+      aliases: ['Acme', 'Acme Holdings'],
+      expandedKeywords: ['Acme Labs', 'Jane Doe'],
+      modelVersion: 'gpt-demo-1',
+    }),
+  });
+
+  return target;
+}
+
 const port = Number.parseInt(process.env.PORT ?? '4311', 10);
 const db = new DatabaseSync(':memory:');
 applyMigrations(db);
@@ -95,10 +149,19 @@ const server = createServer(
   }),
 );
 
-server.listen(port, () => {
-  process.stdout.write(`Target registration demo running on http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/new?userId=user-owner\n`);
-  process.stdout.write(`Member demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/new?userId=user-member\n`);
-});
+seedReviewDemoTarget(db, workspace.id)
+  .then((target) => {
+    server.listen(port, () => {
+      process.stdout.write(`Target registration demo running on http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/new?userId=user-owner\n`);
+      process.stdout.write(`Member demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/new?userId=user-member\n`);
+      process.stdout.write(`Review demo view: http://127.0.0.1:${port}/workspaces/${workspace.id}/targets/${target.id}/review?userId=user-owner\n`);
+    });
+  })
+  .catch((error) => {
+    process.stderr.write(`${error.stack || error.message}\n`);
+    db.close();
+    process.exit(1);
+  });
 
 function closeServer() {
   server.close(() => {

@@ -35,25 +35,165 @@ function renderTypeOptions(availableTargetTypes, selectedType) {
     .join('');
 }
 
-function renderSeedKeywordList(seedKeywords) {
-  if (!seedKeywords.length) {
-    return '<p class="muted-copy">No seed keywords were saved.</p>';
+function renderOrderedKeywordList(keywords, emptyMessage) {
+  if (!keywords.length) {
+    return `<p class="muted-copy">${escapeHtml(emptyMessage)}</p>`;
   }
 
   return `
     <ul class="seed-keyword-list">
-      ${seedKeywords
+      ${keywords
         .map(
-          (seedKeyword) => `
+          (keyword) => `
             <li>
-              <strong>${escapeHtml(seedKeyword.keyword)}</strong>
-              <span>Order ${escapeHtml(seedKeyword.displayOrder + 1)}</span>
+              <strong>${escapeHtml(keyword.keyword)}</strong>
+              <span>Order ${escapeHtml(keyword.displayOrder + 1)}</span>
             </li>
           `,
         )
         .join('')}
     </ul>
   `;
+}
+
+function renderTagList(items, emptyMessage) {
+  if (!items.length) {
+    return `<p class="muted-copy">${escapeHtml(emptyMessage)}</p>`;
+  }
+
+  return `
+    <ul class="tag-list">
+      ${items
+        .map(
+          (item) => `
+            <li class="tag-chip">${escapeHtml(item)}</li>
+          `,
+        )
+        .join('')}
+    </ul>
+  `;
+}
+
+function getSafeEvidenceHref(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+
+    if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+      return parsedUrl.toString();
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function renderSearchResultGroups(searchResults) {
+  if (!searchResults.length) {
+    return '<p class="muted-copy">No discovery search evidence is stored for this profile yet.</p>';
+  }
+
+  return `
+    <div class="search-groups">
+      ${searchResults
+        .map(
+          (resultGroup) => `
+            <section class="search-group">
+              <strong>${escapeHtml(resultGroup.keyword)}</strong>
+              <ul class="search-result-list">
+                ${(Array.isArray(resultGroup.results) ? resultGroup.results : [])
+                  .map(
+                    (result) => {
+                      const safeHref = getSafeEvidenceHref(result.url);
+                      const title = safeHref
+                        ? `<a href="${escapeHtml(safeHref)}">${escapeHtml(result.title)}</a>`
+                        : `<span>${escapeHtml(result.title)}</span>`;
+
+                      return `
+                      <li>
+                        ${title}
+                        <span>${escapeHtml(result.source || 'Source not provided')}</span>
+                      </li>
+                    `;
+                    },
+                  )
+                  .join('')}
+              </ul>
+            </section>
+          `,
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+function renderReviewDecisionForm(reviewWorkflow) {
+  const selectedDecision = reviewWorkflow.review?.reviewDecision ?? '';
+  const canSaveDecision = reviewWorkflow.reviewControls.canSaveDecision;
+  const disabledAttribute = canSaveDecision ? '' : ' disabled';
+
+  return `
+    <form method="post" class="decision-form">
+      <input type="hidden" name="action" value="save-review" />
+      <fieldset class="decision-fieldset"${disabledAttribute}>
+        <legend>Decision</legend>
+        <p class="field-help">Save one of the supported review states: <strong>match</strong>, <strong>partial_match</strong>, or <strong>mismatch</strong>.</p>
+        <div class="decision-grid">
+          ${reviewWorkflow.reviewControls.availableDecisions
+            .map((decision) => {
+              const checkedAttribute = decision === selectedDecision ? ' checked' : '';
+
+              return `
+                <label class="decision-option">
+                  <input type="radio" name="decision" value="${escapeHtml(decision)}"${checkedAttribute} required />
+                  <span>
+                    <strong>${escapeHtml(decision)}</strong>
+                    <small>${escapeHtml(getDecisionDescription(decision))}</small>
+                  </span>
+                </label>
+              `;
+            })
+            .join('')}
+        </div>
+      </fieldset>
+      <div class="form-actions">
+        <p class="muted-copy">
+          ${canSaveDecision
+            ? 'Saving a decision updates the backend review state immediately.'
+            : escapeHtml(getReviewDecisionBlockedReason(reviewWorkflow))}
+        </p>
+        <button type="submit"${disabledAttribute}>Save review decision</button>
+      </div>
+    </form>
+  `;
+}
+
+function getDecisionDescription(decision) {
+  if (decision === 'match') {
+    return 'The generated profile clearly matches the intended subject.';
+  }
+
+  if (decision === 'partial_match') {
+    return 'The profile is close enough to approve, but still needs operator caution.';
+  }
+
+  return 'The generated profile is off-target and should reopen keyword editing.';
+}
+
+function getReviewDecisionBlockedReason(reviewWorkflow) {
+  if (!reviewWorkflow.profile) {
+    return 'Review decisions stay locked until discovery generates a profile.';
+  }
+
+  if (reviewWorkflow.monitoringTarget.status === 'active') {
+    return 'This target is already active, so the review decision is now read-only.';
+  }
+
+  return `Review decisions are unavailable while the target is ${reviewWorkflow.monitoringTarget.status}.`;
 }
 
 function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content }) {
@@ -195,7 +335,10 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         list-style: none;
       }
 
-      .step-list li {
+      .step-list li,
+      .decision-option,
+      .search-group,
+      .activation-note {
         padding: 0.9rem 1rem;
         border-radius: 18px;
         background: rgba(255, 255, 255, 0.56);
@@ -208,7 +351,9 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         margin-bottom: 0.2rem;
       }
 
-      .target-form {
+      .target-form,
+      .decision-form,
+      .activation-form {
         display: grid;
         gap: 1rem;
       }
@@ -276,6 +421,13 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        cursor: pointer;
+      }
+
+      button[disabled] {
+        cursor: not-allowed;
+        opacity: 0.55;
+        background: linear-gradient(135deg, #809184, #536457);
       }
 
       .status-pill {
@@ -298,7 +450,9 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         margin: 0;
       }
 
-      .seed-keyword-list {
+      .seed-keyword-list,
+      .tag-list,
+      .search-result-list {
         list-style: none;
         padding: 0;
         margin: 0;
@@ -306,7 +460,8 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         gap: 0.7rem;
       }
 
-      .seed-keyword-list li {
+      .seed-keyword-list li,
+      .search-result-list li {
         display: flex;
         justify-content: space-between;
         gap: 1rem;
@@ -314,6 +469,71 @@ function renderLayout({ title, eyebrow, bodyClass, heroTitle, heroCopy, content 
         border-radius: 16px;
         background: rgba(255, 255, 255, 0.56);
         border: 1px solid rgba(40, 78, 59, 0.1);
+      }
+
+      .tag-list {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+
+      .tag-chip {
+        padding: 0.8rem 0.95rem;
+        border-radius: 16px;
+        background: rgba(225, 236, 221, 0.8);
+        border: 1px solid rgba(40, 78, 59, 0.12);
+      }
+
+      .decision-grid,
+      .support-grid {
+        display: grid;
+        gap: 0.8rem;
+      }
+
+      .decision-fieldset {
+        border: 0;
+        padding: 0;
+        margin: 0;
+      }
+
+      .decision-option {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.8rem;
+        margin: 0;
+      }
+
+      .decision-option input {
+        width: auto;
+        margin-top: 0.25rem;
+      }
+
+      .decision-option small {
+        display: block;
+        margin-top: 0.25rem;
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .decision-status {
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .search-groups {
+        display: grid;
+        gap: 0.9rem;
+      }
+
+      .search-group strong {
+        display: block;
+        margin-bottom: 0.7rem;
+      }
+
+      .search-result-list li {
+        align-items: flex-start;
+      }
+
+      .search-result-list a {
+        color: var(--accent-strong);
       }
 
       .body-${bodyClass} .hero-copy strong {
@@ -528,10 +748,17 @@ function renderMonitoringTargetReviewPage({
   flashMessage,
 }) {
   const target = reviewWorkflow.monitoringTarget;
-  const heroCopy = `
-    <strong>${escapeHtml(target.displayName)}</strong> now has a stable review URL inside <strong>${escapeHtml(reviewWorkflow.workspace.name)}</strong>.
-    Full profile review controls arrive next, but this workflow entry point already anchors the newly created target and its seed scope.
-  `;
+  const profile = reviewWorkflow.profile;
+  const review = reviewWorkflow.review;
+  const heroCopy = profile
+    ? `
+        <strong>${escapeHtml(target.displayName)}</strong> has generated discovery output ready inside <strong>${escapeHtml(reviewWorkflow.workspace.name)}</strong>.
+        Review the summary, aliases, related entities, and keyword candidates before deciding whether collection can move forward.
+      `
+    : `
+        <strong>${escapeHtml(target.displayName)}</strong> is already anchored in <strong>${escapeHtml(reviewWorkflow.workspace.name)}</strong>,
+        but discovery still needs to generate the review profile before a decision or activation can happen.
+      `;
 
   return renderLayout({
     title: `${target.displayName} review workflow`,
@@ -546,7 +773,7 @@ function renderMonitoringTargetReviewPage({
           <section class="panel">
             <div class="panel-intro">
               <h2>Target snapshot</h2>
-              <p class="muted-copy">The target has been saved and is waiting for the rest of the review flow to populate discovery output.</p>
+              <p class="muted-copy">Review stays target-specific so the approval record, activation state, and generated profile stay tied to one subject.</p>
             </div>
             <dl class="meta-list">
               <div>
@@ -577,31 +804,109 @@ function renderMonitoringTargetReviewPage({
           </section>
           <section class="panel">
             <div class="panel-intro">
-              <h2>Seed keywords</h2>
-              <p class="muted-copy">These terms define the first pass of discovery and disambiguation for the subject.</p>
+              <h2>Generated profile</h2>
+              <p class="muted-copy">
+                ${profile
+                  ? 'The discovery job has already persisted this profile for operator review.'
+                  : 'No generated profile is attached yet. Discovery needs to run before the full review decision can be saved.'}
+              </p>
             </div>
-            ${renderSeedKeywordList(target.seedKeywords)}
+            ${profile
+              ? `
+                  <div class="support-grid">
+                    <div class="activation-note">
+                      <strong>Summary</strong>
+                      <p>${escapeHtml(profile.summary)}</p>
+                    </div>
+                    <div class="activation-note">
+                      <strong>Profile metadata</strong>
+                      <p>Model version: ${escapeHtml(profile.modelVersion)}</p>
+                      <p>Generated at: ${escapeHtml(profile.generatedAt)}</p>
+                    </div>
+                  </div>
+                `
+              : `
+                  <div class="activation-note">
+                    <strong>Discovery pending</strong>
+                    <p>The review URL is ready, but the generated summary, aliases, related entities, and keyword candidates will appear only after discovery completes.</p>
+                  </div>
+                `}
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Profile signals</h2>
+              <p class="muted-copy">Use these generated signals to decide whether the monitoring subject matches your original intent.</p>
+            </div>
+            <div class="support-grid">
+              <div>
+                <h3>Related entities</h3>
+                ${renderTagList(profile?.relatedEntities ?? [], 'No related entities were generated.')}
+              </div>
+              <div>
+                <h3>Aliases</h3>
+                ${renderTagList(profile?.aliases ?? [], 'No aliases were generated.')}
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Keyword candidates</h2>
+              <p class="muted-copy">Seed keywords define the original scope. Expanded keywords are the candidate terms discovery generated for operator review.</p>
+            </div>
+            <div class="support-grid">
+              <div>
+                <h3>Seed keywords</h3>
+                ${renderOrderedKeywordList(target.seedKeywords, 'No seed keywords were saved.')}
+              </div>
+              <div>
+                <h3>Expanded keywords</h3>
+                ${renderOrderedKeywordList(target.expandedKeywords, 'No expanded keyword candidates were generated yet.')}
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Discovery evidence</h2>
+              <p class="muted-copy">Stored search results show which seed queries informed the generated profile.</p>
+            </div>
+            ${renderSearchResultGroups(profile?.searchResults ?? [])}
           </section>
         </section>
         <aside class="stack">
           <section class="panel">
             <div class="panel-intro">
-              <h2>Review path</h2>
+              <h2>Review decision</h2>
+              <p class="muted-copy">This screen can persist <strong>match</strong>, <strong>partial_match</strong>, or <strong>mismatch</strong> before activation is allowed.</p>
             </div>
-            <ol class="step-list">
-              <li>
-                <strong>Saved</strong>
-                <span>The monitoring target and ordered seed keywords are persisted.</span>
-              </li>
-              <li>
-                <strong>Discovery output</strong>
-                <span>Summary, aliases, related entities, and candidate keywords will attach here as the review surface expands.</span>
-              </li>
-              <li>
-                <strong>Decision</strong>
-                <span>Match, partial match, and mismatch decisions remain part of the next story.</span>
-              </li>
-            </ol>
+            ${renderReviewDecisionForm(reviewWorkflow)}
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Current state</h2>
+              <p class="muted-copy">Review and activation timestamps stay separate so approval history remains auditable.</p>
+            </div>
+            <div class="decision-status">
+              <p><strong>Saved decision:</strong> ${escapeHtml(review?.reviewDecision ?? 'none')}</p>
+              <p><strong>Reviewed at:</strong> ${escapeHtml(review?.reviewedAt ?? 'Not saved yet')}</p>
+              <p><strong>Activated at:</strong> ${escapeHtml(review?.activatedAt ?? 'Not activated')}</p>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-intro">
+              <h2>Activation</h2>
+              <p class="muted-copy">Activation is unavailable until a review decision is saved and approved.</p>
+            </div>
+            <form method="post" class="activation-form">
+              <input type="hidden" name="action" value="activate" />
+              <div class="activation-note">
+                <strong>Availability</strong>
+                <p>${escapeHtml(reviewWorkflow.activation.blockedReason ?? 'Activation is ready for this approved target.')}</p>
+              </div>
+              <div class="form-actions">
+                <p class="muted-copy">Signed in as <strong>${escapeHtml(reviewWorkflow.viewer.role)}</strong> for this workspace.</p>
+                <button type="submit"${reviewWorkflow.activation.canActivate ? '' : ' disabled'}>Activate monitoring target</button>
+              </div>
+            </form>
           </section>
           <section class="panel">
             <div class="panel-intro">

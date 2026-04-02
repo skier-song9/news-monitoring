@@ -28,6 +28,8 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
 - For analytics aggregations, query high-risk `article_analysis` rows with non-null `article_content.published_at`, normalize publisher/reporter labels case-insensitively, and return `articleAnalysisIds` with `articleIds` so drilldowns stay aligned with the feed grain.
 - For lightweight UI stories in this repo, keep SQL and auth checks in the existing service module, render HTML in a small `src/ui/*.cjs` view, and wrap both with a dependency-free `node:http` route so `node:test` and browser demos exercise the same surface.
 - For newline-delimited form inputs like seed keywords, trim lines on both the server parser and a small `setCustomValidity` browser guard so whitespace-only submissions are blocked before POST and still rejected on direct requests.
+- For dependency-free `node:http` workflow screens, keep POST actions redirecting back to GET with query-param flash state, and derive button enabled/disabled state from backend workflow payloads so the UI cannot drift from lifecycle rules.
+- When review surfaces show third-party evidence links, validate stored URLs as absolute `http`/`https` during ingestion and still sanitize anchors at render time so legacy rows cannot become scriptable links.
 ---
 ## 2026-03-30 20:04:26 KST - US-001
 - Implemented the initial tenant schema with `workspace`, `workspace_membership`, and `workspace_invitation`, plus a supporting `user_account` table needed for membership foreign keys.
@@ -243,4 +245,13 @@ Started: 2026년  3월 30일 월요일 19시 54분 40초 KST
   - Patterns discovered: lightweight workflow UIs can redirect into a target-specific placeholder route now and let a later story deepen that route without changing the registration contract.
   - Gotchas encountered: `required` on a textarea does not stop whitespace-only submissions, so newline-based keyword forms need trimmed browser validation in addition to server parsing.
   - Useful context: browser verification used `npm run target-registration-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/targets/new?userId=user-owner`; whitespace-only seed keywords stayed on the form with a custom validation message, successful submission redirected to `/workspaces/workspace-1/targets/target-demo-1/review?userId=user-owner&created=1`, there were still no `AGENTS.md` files in this repository to update, and `npm run check` passed with 105 passing tests.
+---
+## 2026-04-02 12:27:55 KST - US-025
+- Implemented the server-rendered target review workflow so operators can inspect generated summaries, related entities, aliases, keyword candidates, and discovery evidence, then save `match`, `partial_match`, or `mismatch` decisions and activate approved targets from the same screen.
+- Tightened the review lifecycle contract by requiring a generated profile before review-save or activation, validating discovery evidence URLs as absolute `http`/`https`, sanitizing rendered evidence links, and restoring target status safely if a failing discovery run loses a race with a newer successful run.
+- Files changed: `scripts/monitoring-target-registration-demo.cjs`, `src/backend/monitoring-target-discovery-job.cjs`, `src/backend/monitoring-target-service.cjs`, `src/http/monitoring-target-registration-app.cjs`, `src/ui/monitoring-target-registration-page.cjs`, `tests/monitoring-target-discovery-job.test.cjs`, `tests/monitoring-target-registration-app.test.cjs`, `tests/monitoring-target-service.test.cjs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Patterns discovered: server-rendered lifecycle screens work best here when the backend returns explicit `canSaveDecision` and `canActivate` flags plus blocked-reason strings, so button state and direct POST behavior stay aligned.
+  - Gotchas encountered: validating third-party evidence only on input is not enough because legacy rows can still exist; the renderer must treat unsafe URLs as inert text even after ingestion-side validation is added.
+  - Useful context: browser verification used `npm run target-registration-demo` at `http://127.0.0.1:4311/workspaces/workspace-1/targets/target-review-demo-1/review?userId=user-owner`; saving `partial_match` moved the target to `awaiting_activation`, activating it moved the target to `active`, and `npm run check` passed with 115 passing tests after the follow-up security and rollback fixes.
 ---

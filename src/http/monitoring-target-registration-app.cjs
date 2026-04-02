@@ -4,9 +4,11 @@ const { URL, URLSearchParams } = require('node:url');
 
 const {
   MonitoringTargetServiceError,
+  activateMonitoringTarget,
   createMonitoringTarget,
   getMonitoringTargetRegistrationPage,
   getMonitoringTargetReviewWorkflow,
+  saveMonitoringTargetReviewDecision,
 } = require('../backend/monitoring-target-service.cjs');
 const {
   renderMonitoringTargetRegistrationPage,
@@ -128,6 +130,34 @@ function buildRegistrationFlashMessage(requestUrl) {
 }
 
 function buildReviewFlashMessage(requestUrl) {
+  const errorMessage = requestUrl.searchParams.get('error');
+
+  if (errorMessage) {
+    return {
+      type: 'error',
+      title: 'Review action unavailable',
+      message: errorMessage,
+    };
+  }
+
+  if (requestUrl.searchParams.get('activated') === '1') {
+    return {
+      type: 'success',
+      title: 'Target activated',
+      message: 'Collection can start because the review approval has already been saved.',
+    };
+  }
+
+  const reviewSaved = requestUrl.searchParams.get('reviewSaved');
+
+  if (reviewSaved) {
+    return {
+      type: 'success',
+      title: 'Review saved',
+      message: `Decision recorded: ${reviewSaved}.`,
+    };
+  }
+
   if (requestUrl.searchParams.get('created') !== '1') {
     return null;
   }
@@ -161,7 +191,7 @@ function buildRegistrationLocation(requestUrl, formValues, errorMessage) {
   return `${requestUrl.pathname}${search ? `?${search}` : ''}`;
 }
 
-function buildReviewLocation(requestUrl, workspaceId, monitoringTargetId) {
+function buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, flashState = {}) {
   const nextParams = new URLSearchParams();
   const userId = requestUrl.searchParams.get('userId');
 
@@ -169,9 +199,17 @@ function buildReviewLocation(requestUrl, workspaceId, monitoringTargetId) {
     nextParams.set('userId', userId);
   }
 
-  nextParams.set('created', '1');
+  for (const [key, value] of Object.entries(flashState)) {
+    if (value == null || value === '') {
+      continue;
+    }
 
-  return `/workspaces/${encodeURIComponent(workspaceId)}/targets/${encodeURIComponent(monitoringTargetId)}/review?${nextParams.toString()}`;
+    nextParams.set(key, String(value));
+  }
+
+  const search = nextParams.toString();
+  const pathname = `/workspaces/${encodeURIComponent(workspaceId)}/targets/${encodeURIComponent(monitoringTargetId)}/review`;
+  return search ? `${pathname}?${search}` : pathname;
 }
 
 function getErrorStatusCode(error) {
@@ -288,7 +326,9 @@ function createMonitoringTargetRegistrationApp({
 
           redirect(
             response,
-            buildReviewLocation(requestUrl, workspaceId, monitoringTarget.id),
+            buildReviewLocation(requestUrl, workspaceId, monitoringTarget.id, {
+              created: '1',
+            }),
           );
         } catch (error) {
           if (error instanceof MonitoringTargetServiceError) {
@@ -317,39 +357,107 @@ function createMonitoringTargetRegistrationApp({
     const reviewRouteMatch = getReviewRouteMatch(requestUrl.pathname);
 
     if (reviewRouteMatch) {
-      if (request.method !== 'GET') {
-        sendText(response, 405, 'Method not allowed');
-        return;
-      }
-
       const workspaceId = decodeURIComponent(reviewRouteMatch[1]);
       const monitoringTargetId = decodeURIComponent(reviewRouteMatch[2]);
 
-      try {
-        const reviewWorkflow = getMonitoringTargetReviewWorkflow({
-          db,
-          workspaceId,
-          monitoringTargetId,
-          userId,
-        });
+      if (request.method === 'GET') {
+        try {
+          const reviewWorkflow = getMonitoringTargetReviewWorkflow({
+            db,
+            workspaceId,
+            monitoringTargetId,
+            userId,
+          });
 
-        sendHtml(
-          response,
-          200,
-          renderMonitoringTargetReviewPage({
-            reviewWorkflow,
-            flashMessage: buildReviewFlashMessage(requestUrl),
-          }),
-        );
-      } catch (error) {
-        if (error instanceof MonitoringTargetServiceError) {
-          sendText(response, getErrorStatusCode(error), error.message);
-          return;
+          sendHtml(
+            response,
+            200,
+            renderMonitoringTargetReviewPage({
+              reviewWorkflow,
+              flashMessage: buildReviewFlashMessage(requestUrl),
+            }),
+          );
+        } catch (error) {
+          if (error instanceof MonitoringTargetServiceError) {
+            sendText(response, getErrorStatusCode(error), error.message);
+            return;
+          }
+
+          throw error;
         }
 
-        throw error;
+        return;
       }
 
+      if (request.method === 'POST') {
+        try {
+          const formData = await parseFormBody(request);
+          const action = normalizeFormValue(formData.get('action'));
+
+          if (action === 'save-review') {
+            const decision = normalizeFormValue(formData.get('decision'));
+
+            saveMonitoringTargetReviewDecision({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              userId,
+              decision,
+              now,
+              createId,
+            });
+
+            redirect(
+              response,
+              buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, {
+                reviewSaved: decision.trim().toLowerCase(),
+              }),
+            );
+            return;
+          }
+
+          if (action === 'activate') {
+            activateMonitoringTarget({
+              db,
+              workspaceId,
+              monitoringTargetId,
+              userId,
+              now,
+            });
+
+            redirect(
+              response,
+              buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, {
+                activated: '1',
+              }),
+            );
+            return;
+          }
+
+          sendText(response, 400, 'Unknown review action');
+        } catch (error) {
+          if (error instanceof MonitoringTargetServiceError) {
+            redirect(
+              response,
+              buildReviewLocation(requestUrl, workspaceId, monitoringTargetId, {
+                error: error.message,
+              }),
+            );
+            return;
+          }
+
+          if (error instanceof Error && /16kb/u.test(error.message)) {
+            sendText(response, 413, error.message);
+            return;
+          }
+
+          throw error;
+        }
+
+        return;
+      }
+
+      sendText(response, 405, 'Method not allowed');
       return;
     }
 

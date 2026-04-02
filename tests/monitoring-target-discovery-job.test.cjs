@@ -577,3 +577,181 @@ test('runMonitoringTargetDiscoveryJob rejects unsupported target statuses', asyn
 
   db.close();
 });
+
+test('runMonitoringTargetDiscoveryJob rejects search results with non-http urls', async () => {
+  const db = createDatabase();
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme',
+    name: 'Acme',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertKeyword(db, {
+    id: 'seed-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Holdings',
+  });
+
+  await assert.rejects(
+    () =>
+      runMonitoringTargetDiscoveryJob({
+        db,
+        monitoringTargetId: 'target-1',
+        searchWeb: async () => [
+          {
+            title: 'Unsafe result',
+            url: 'javascript:alert(1)',
+            source: 'Bad Feed',
+          },
+        ],
+        generateTargetProfile: async () => ({
+          summary: 'Should not persist',
+          relatedEntities: [],
+          aliases: [],
+          expandedKeywords: [],
+          modelVersion: 'gpt-test',
+        }),
+      }),
+    (error) => {
+      assert.ok(error instanceof MonitoringTargetDiscoveryJobError);
+      assert.equal(error.code, 'INVALID_INPUT');
+      assert.match(error.message, /must use http or https/u);
+      return true;
+    },
+  );
+
+  const savedTarget = db
+    .prepare(`
+      SELECT status
+      FROM monitoring_target
+      WHERE id = ?
+    `)
+    .get('target-1');
+
+  assert.deepEqual(normalizeRow(savedTarget), {
+    status: 'review_required',
+  });
+
+  db.close();
+});
+
+test('failed discovery rollback does not clobber a newer successful run', async () => {
+  const db = createDatabase();
+
+  insertWorkspace(db, {
+    id: 'workspace-1',
+    slug: 'acme',
+    name: 'Acme',
+  });
+  insertMonitoringTarget(db, {
+    id: 'target-1',
+    workspaceId: 'workspace-1',
+    displayName: 'Acme Holdings',
+  });
+  insertKeyword(db, {
+    id: 'seed-1',
+    monitoringTargetId: 'target-1',
+    keyword: 'Acme Holdings',
+  });
+
+  let releaseFirstSearch;
+  const firstSearchGate = new Promise((resolve) => {
+    releaseFirstSearch = resolve;
+  });
+
+  const firstJob = runMonitoringTargetDiscoveryJob({
+    db,
+    monitoringTargetId: 'target-1',
+    now: createIdGenerator(
+      '2026-04-02T01:00:00.000Z',
+      '2026-04-02T01:05:00.000Z',
+    ),
+    createId: createIdGenerator('unused-profile'),
+    searchWeb: async () => {
+      await firstSearchGate;
+
+      return [
+        {
+          title: 'Unsafe result',
+          url: 'javascript:alert(1)',
+          source: 'Bad Feed',
+        },
+      ];
+    },
+    generateTargetProfile: async () => ({
+      summary: 'Should not persist',
+      relatedEntities: [],
+      aliases: [],
+      expandedKeywords: [],
+      modelVersion: 'gpt-fail',
+    }),
+  });
+
+  await Promise.resolve();
+
+  const secondJob = await runMonitoringTargetDiscoveryJob({
+    db,
+    monitoringTargetId: 'target-1',
+    now: createIdGenerator(
+      '2026-04-02T02:00:00.000Z',
+      '2026-04-02T02:10:00.000Z',
+    ),
+    createId: createIdGenerator('profile-success-1', 'expanded-success-1'),
+    searchWeb: async () => [
+      {
+        title: 'Safe result',
+        url: 'https://news.example.com/acme-holdings',
+        source: 'Google News',
+      },
+    ],
+    generateTargetProfile: async () => ({
+      summary: 'Safe profile summary',
+      relatedEntities: ['Jane Doe'],
+      aliases: ['Acme'],
+      expandedKeywords: ['Acme Labs'],
+      modelVersion: 'gpt-safe',
+    }),
+  });
+
+  releaseFirstSearch();
+
+  await assert.rejects(
+    () => firstJob,
+    (error) => {
+      assert.ok(error instanceof MonitoringTargetDiscoveryJobError);
+      assert.equal(error.code, 'INVALID_INPUT');
+      return true;
+    },
+  );
+
+  const savedTarget = db
+    .prepare(`
+      SELECT status
+      FROM monitoring_target
+      WHERE id = ?
+    `)
+    .get('target-1');
+  const savedProfile = db
+    .prepare(`
+      SELECT summary, model_version
+      FROM monitoring_target_profile
+      WHERE monitoring_target_id = ?
+    `)
+    .get('target-1');
+
+  assert.equal(secondJob.status, monitoringTargetReadyForReviewStatus);
+  assert.deepEqual(normalizeRow(savedTarget), {
+    status: monitoringTargetReadyForReviewStatus,
+  });
+  assert.deepEqual(normalizeRow(savedProfile), {
+    summary: 'Safe profile summary',
+    model_version: 'gpt-safe',
+  });
+
+  db.close();
+});
